@@ -28,7 +28,12 @@ An offline-first Progressive Web App for making QR codes. No accounts, no ads, n
   - A typical code takes about 100–250 bytes of `localStorage`, so the browser's roughly 5 MB per-site allowance holds tens of thousands. There's no count limit, and nothing is ever deleted automatically: if storage does fill up, the save fails with a message.
   - The Library loads cards a page at a time as you scroll and draws each thumbnail only when it comes into view, so it stays fast with thousands of codes.
   - Every stored code can be revised: open it and your changes save back to the same code. "Save as copy" branches it, "New code" starts fresh, and you're warned before unsaved changes are discarded.
-  - Browse, search, pin, delete with undo, clear, and export/import as JSON.
+  - Browse, search, pin, delete with undo, and clear.
+  - **Export** saves the whole library as one JSON file. **Import** merges such a file without creating duplicates:
+    - Codes already in the library, or repeated within the file, are skipped.
+    - If the file has a newer revision of a code you already have (the same code edited on another device), it replaces the older one.
+    - A pin on either side is kept.
+    - Exports from earlier versions can be imported.
 - **Offline:** a service worker precaches the whole app after the first visit, and it can be installed as an app.
 
 ## Development

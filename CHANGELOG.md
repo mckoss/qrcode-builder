@@ -9,6 +9,7 @@ All notable changes to this project are documented here. This project follows [S
 - The 200-code limit is removed, and codes are never pruned automatically. If browser storage is full, the save fails with a message instead of deleting older codes.
 - The library loads cards a page at a time as you scroll, and draws each thumbnail only when it becomes visible, so it stays fast with thousands of codes.
 - Library exports use the compact format (version 2). Older exports still import.
+- Importing a library is much faster with large files (10,000 codes in well under a second). It never adds duplicates: codes already present, or repeated within the file, are skipped. A newer revision of a code you already have replaces the older one. The result message reports how many codes were added, updated, skipped or unreadable.
 
 ### Migration
 - Libraries saved by 1.0–1.1 are converted to the compact format on first load, and the old copy is removed.

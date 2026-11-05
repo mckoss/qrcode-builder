@@ -372,20 +372,70 @@ export function exportHistory(): string {
   return JSON.stringify({ app: 'qrcode-builder', version: 2, exported: new Date().toISOString(), entries }, null, 2);
 }
 
-/** Merge entries from an exported file (current or pre-1.2 format). Returns the number added. */
-export function importHistory(json: string): { added: number; list: HistoryEntry[]; ok: boolean } {
+export interface ImportResult {
+  /** New codes added to the library. */
+  added: number;
+  /** Existing codes replaced by a newer revision of the same code from the file. */
+  updated: number;
+  /** Codes already in the library (same code, or identical content) that were skipped. */
+  duplicates: number;
+  /** Records in the file that aren't usable codes. */
+  invalid: number;
+  ok: boolean;
+  list: HistoryEntry[];
+}
+
+/** Identity of a code's content, for duplicate detection. */
+function contentKey(e: EntryContent): string {
+  const s = e.style;
+  return JSON.stringify([e.type, e.payload, e.description, e.showDescription, e.showDecoded, s.fg, s.bg, s.transparent, s.ec, s.margin]);
+}
+
+/**
+ * Merge a library export (current or pre-1.2 format) into the library, without duplicates:
+ * - the same code (same id) is replaced only if the file has a newer revision of it;
+ * - a code with identical content to one already present (or earlier in the file) is skipped;
+ * - anything else is added. A pin on either side is kept.
+ */
+export function importHistory(json: string): ImportResult {
   const parsed = JSON.parse(json);
   const incoming: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.entries) ? parsed.entries : [];
   if (!incoming.length) throw new Error('No QR code entries found in that file.');
   const list = loadHistory();
-  let added = 0;
+  const byId = new Map(list.map((e) => [e.id, e]));
+  const byContent = new Map(list.map((e) => [contentKey(e), e]));
+  const r = { added: 0, updated: 0, duplicates: 0, invalid: 0 };
   for (const raw of incoming) {
     const e = sanitizeEntry(raw);
-    if (!e) continue;
-    if (list.some((x) => x.id === e.id || sameContent(x, e))) continue;
+    if (!e) {
+      r.invalid++;
+      continue;
+    }
+    const key = contentKey(e);
+    const same = byId.get(e.id);
+    if (same) {
+      if (e.updated > same.updated && contentKey(same) !== key) {
+        byContent.delete(contentKey(same));
+        Object.assign(same, { ...e, pinned: same.pinned || e.pinned, source: same.source ?? e.source });
+        byContent.set(key, same);
+        r.updated++;
+      } else {
+        if (e.pinned) same.pinned = true;
+        r.duplicates++;
+      }
+      continue;
+    }
+    const twin = byContent.get(key);
+    if (twin) {
+      if (e.pinned) twin.pinned = true;
+      r.duplicates++;
+      continue;
+    }
     list.push(e);
-    added++;
+    byId.set(e.id, e);
+    byContent.set(key, e);
+    r.added++;
   }
   const ok = saveHistory(list);
-  return { added: ok ? added : 0, list: loadHistory(), ok };
+  return ok ? { ...r, ok, list: loadHistory() } : { added: 0, updated: 0, duplicates: 0, invalid: r.invalid, ok, list: loadHistory() };
 }

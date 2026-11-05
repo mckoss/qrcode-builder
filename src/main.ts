@@ -940,15 +940,24 @@ function bindHistory(): void {
     fileInput.value = '';
     if (!file) return;
     try {
-      const { added, list, ok } = importHistory(await file.text());
-      history = list;
-      renderHistory();
+      const r = importHistory(await file.text());
+      history = r.list;
+      renderHistory(true);
+      updateEditState();
+      const n = (k: number, word: string) => `${k.toLocaleString()} ${word}`;
+      const parts = [
+        r.added && n(r.added, `new code${r.added === 1 ? '' : 's'} added`),
+        r.updated && n(r.updated, `code${r.updated === 1 ? '' : 's'} updated to a newer version`),
+        r.duplicates && n(r.duplicates, `duplicate${r.duplicates === 1 ? '' : 's'} skipped`),
+        r.invalid && n(r.invalid, `unreadable entr${r.invalid === 1 ? 'y' : 'ies'} ignored`),
+      ].filter(Boolean);
       toast(
-        !ok
-          ? 'Not enough storage to import those codes.'
-          : added
-            ? `Imported ${added.toLocaleString()} code${added === 1 ? '' : 's'}.`
-            : 'Nothing new to import.',
+        !r.ok
+          ? 'Not enough storage to import those codes. Nothing was changed.'
+          : r.added || r.updated
+            ? `Import complete: ${parts.join(', ')}.`
+            : `Nothing new to import (${parts.join(', ')}).`,
+        { duration: 6000 },
       );
     } catch (err) {
       toast(err instanceof Error && err.message.startsWith('No QR') ? err.message : 'That file isn’t a library export.');

@@ -187,4 +187,50 @@ describe('history', () => {
     expect(store.loadHistory()).toHaveLength(2);
     expect(store.addToHistory(item('same')).list).toHaveLength(2);
   });
+
+  describe('import', () => {
+    const exportOf = (entries: unknown[]) => JSON.stringify({ app: 'qrcode-builder', version: 2, entries });
+
+    it('adds new codes and skips duplicates, including duplicates within the file', () => {
+      store.addToHistory(item('a'));
+      const json = exportOf([
+        { id: 'x1', created: 1, updated: 1, type: 'text', fields: { text: 'a' } }, // same content as existing
+        { id: 'x2', created: 1, updated: 1, type: 'text', fields: { text: 'b' } },
+        { id: 'x3', created: 1, updated: 1, type: 'text', fields: { text: 'b' } }, // duplicate within file
+        { id: 'x4', type: 'nope' }, // unreadable
+      ]);
+      const r = store.importHistory(json);
+      expect(r).toMatchObject({ added: 1, updated: 0, duplicates: 2, invalid: 1, ok: true });
+      expect(store.loadHistory().map((e) => e.payload).sort()).toEqual(['a', 'b']);
+      expect(store.importHistory(json)).toMatchObject({ added: 0, duplicates: 3 });
+    });
+
+    it('takes a newer revision of the same code and keeps an older one out', () => {
+      const { id } = store.addToHistory(item('v1'));
+      const now = store.getEntry(id)!.updated;
+      expect(store.importHistory(exportOf([{ id, created: 1, updated: now - 1000, type: 'text', fields: { text: 'old' } }])))
+        .toMatchObject({ updated: 0, duplicates: 1 });
+      expect(store.getEntry(id)!.payload).toBe('v1');
+      expect(store.importHistory(exportOf([{ id, created: 1, updated: now + 1000, type: 'text', fields: { text: 'v2' }, pinned: true }])))
+        .toMatchObject({ updated: 1, added: 0 });
+      expect(store.getEntry(id)).toMatchObject({ payload: 'v2', pinned: true });
+      expect(store.loadHistory()).toHaveLength(1);
+    });
+
+    it('round-trips a whole library through export and import', () => {
+      for (let i = 0; i < 50; i++) store.addToHistory(item(`c${i}`));
+      const json = store.exportHistory();
+      localStorage.clear();
+      expect(store.importHistory(json)).toMatchObject({ added: 50, duplicates: 0 });
+      expect(store.importHistory(json)).toMatchObject({ added: 0, duplicates: 50 });
+    });
+
+    it('imports large libraries quickly', () => {
+      const entries = Array.from({ length: 10000 }, (_, i) => ({ id: `id${i}`, created: i, updated: i, type: 'text', fields: { text: `t${i}` } }));
+      const t = performance.now();
+      expect(store.importHistory(exportOf(entries)).added).toBe(10000);
+      expect(store.importHistory(exportOf(entries)).duplicates).toBe(10000);
+      expect(performance.now() - t).toBeLessThan(3000);
+    });
+  });
 });
