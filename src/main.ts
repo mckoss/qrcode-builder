@@ -19,7 +19,6 @@ import {
   clearHistory,
   DEFAULT_STYLE,
   exportHistory,
-  HISTORY_LIMIT,
   historyBytes,
   importHistory,
   loadDraft,
@@ -761,14 +760,46 @@ const historyList = $('history-list');
 const historySearch = $<HTMLInputElement>('history-search');
 
 function renderHistoryCount(): void {
-  $('history-count').textContent = history.length ? String(history.length) : '';
+  $('history-count').textContent = history.length ? history.length.toLocaleString() : '';
 }
 
 function entryLabel(e: HistoryEntry): string {
   return e.description.trim().split('\n')[0] || TYPE_BY_ID[e.type].summary(e.fields);
 }
 
-function renderHistory(): void {
+// The library can hold thousands of codes: cards are added a page at a time as you scroll,
+// and each thumbnail is drawn from its source data only when it scrolls into view.
+const PAGE_SIZE = 60;
+let shownCount = PAGE_SIZE;
+let filteredItems: HistoryEntry[] = [];
+
+const thumbObserver = new IntersectionObserver(
+  (entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      const canvas = en.target as HTMLCanvasElement & { entry?: HistoryEntry };
+      thumbObserver.unobserve(canvas);
+      const e = canvas.entry;
+      if (!e) continue;
+      try {
+        renderThumb(canvas, makeMatrix(e.payload, e.style.ec), e.style, Math.round(84 * Math.min(window.devicePixelRatio || 1, 3)));
+      } catch {
+        /* unrenderable entry: leave blank */
+      }
+    }
+  },
+  { rootMargin: '400px 0px' },
+);
+
+const moreObserver = new IntersectionObserver((entries) => {
+  if (entries.some((en) => en.isIntersecting) && shownCount < filteredItems.length) {
+    shownCount += PAGE_SIZE;
+    appendHistoryCards();
+  }
+});
+
+function renderHistory(resetPaging = false): void {
+  if (resetPaging) shownCount = PAGE_SIZE;
   renderHistoryCount();
   const q = historySearch.value.trim().toLowerCase();
   const items = history
@@ -781,86 +812,107 @@ function renderHistory(): void {
     );
 
   const kb = historyBytes() / 1024;
-  $('storage-usage').textContent = `${history.length} of ${HISTORY_LIMIT} · ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const size = kb < 10 ? `${kb.toFixed(1)} KB` : kb < 1024 ? `${Math.round(kb)} KB` : `${(kb / 1024).toFixed(1)} MB`;
+  $('storage-usage').textContent = `${history.length.toLocaleString()} code${history.length === 1 ? '' : 's'} · ${size}`;
   $('history-empty').hidden = items.length > 0;
   $('history-empty').textContent = history.length
     ? 'No matches.'
     : 'No saved codes yet. Create one, or scan an existing code to clone it.';
 
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
-  historyList.replaceChildren(
-    ...items.map((e) => {
-      const canvas = h('canvas');
-      try {
-        renderThumb(canvas, makeMatrix(e.payload, e.style.ec), e.style, Math.round(84 * dpr));
-      } catch {
-        /* unrenderable entry: leave blank */
-      }
-      const date = new Date(e.updated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-      const isEditing = e.id === draft.editingId;
-      return h(
-        'li',
-        { class: `history-item${isEditing ? ' editing' : ''}` },
-        h(
-          'button',
-          { type: 'button', class: 'thumb', title: 'Edit', 'aria-label': `Edit ${entryLabel(e)}`, onclick: () => openEntry(e) },
-          canvas,
-        ),
-        h(
-          'div',
-          { class: 'history-body' },
-          h(
-            'div',
-            { class: 'history-title', title: entryLabel(e) },
-            (e.pinned ? '📌 ' : '') + entryLabel(e),
-            isEditing ? h('span', { class: 'tag', text: 'Editing' }) : null,
-          ),
-          h(
-            'div',
-            { class: 'history-sub' },
-            `${TYPE_BY_ID[e.type].label}${e.source === 'scan' ? ' · Scanned' : ''} · ${date}`,
-          ),
-          h('div', { class: 'history-sub', title: e.payload, text: e.payload.replace(/\s+/g, ' ') }),
-          h(
-            'div',
-            { class: 'history-actions' },
-            h('button', { type: 'button', class: 'btn', text: 'Edit', onclick: () => openEntry(e) }),
-            h('button', {
-              type: 'button',
-              class: `btn${e.pinned ? ' pin-on' : ''}`,
-              text: e.pinned ? 'Unpin' : 'Pin',
-              'aria-pressed': String(!!e.pinned),
-              onclick: () => {
-                history = updateEntry(e.id, { pinned: !e.pinned });
-                renderHistory();
-              },
-            }),
-            h('button', {
-              type: 'button',
-              class: 'btn danger',
-              text: 'Delete',
-              onclick: () => {
-                const wasEditing = draft.editingId === e.id;
-                history = removeEntry(e.id);
-                if (wasEditing) draft.editingId = null;
+  filteredItems = items;
+  for (const c of historyList.querySelectorAll('canvas')) thumbObserver.unobserve(c);
+  historyList.replaceChildren();
+  appendHistoryCards();
+}
+
+function appendHistoryCards(): void {
+  const from = historyList.querySelectorAll('.history-item').length;
+  const to = Math.min(shownCount, filteredItems.length);
+  historyList.querySelector('.history-more')?.remove();
+  for (const e of filteredItems.slice(from, to)) historyList.append(historyCard(e));
+  if (to < filteredItems.length) {
+    const more = h('li', { class: 'history-more' }, h('button', {
+      type: 'button',
+      class: 'btn',
+      text: `Show more (${(filteredItems.length - to).toLocaleString()} left)`,
+      onclick: () => {
+        shownCount += PAGE_SIZE;
+        appendHistoryCards();
+      },
+    }));
+    historyList.append(more);
+    moreObserver.disconnect();
+    moreObserver.observe(more);
+  }
+}
+
+function historyCard(e: HistoryEntry): HTMLLIElement {
+  const canvas = h('canvas', { width: 1, height: 1 }) as HTMLCanvasElement & { entry?: HistoryEntry };
+  canvas.entry = e;
+  thumbObserver.observe(canvas);
+  const date = new Date(e.updated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const isEditing = e.id === draft.editingId;
+  return h(
+    'li',
+    { class: `history-item${isEditing ? ' editing' : ''}` },
+    h(
+      'button',
+      { type: 'button', class: 'thumb', title: 'Edit', 'aria-label': `Edit ${entryLabel(e)}`, onclick: () => openEntry(e) },
+      canvas,
+    ),
+    h(
+      'div',
+      { class: 'history-body' },
+      h(
+        'div',
+        { class: 'history-title', title: entryLabel(e) },
+        (e.pinned ? '📌 ' : '') + entryLabel(e),
+        isEditing ? h('span', { class: 'tag', text: 'Editing' }) : null,
+      ),
+      h(
+        'div',
+        { class: 'history-sub' },
+        `${TYPE_BY_ID[e.type].label}${e.source === 'scan' ? ' · Scanned' : ''} · ${date}`,
+      ),
+      h('div', { class: 'history-sub', title: e.payload, text: e.payload.replace(/\s+/g, ' ') }),
+      h(
+        'div',
+        { class: 'history-actions' },
+        h('button', { type: 'button', class: 'btn', text: 'Edit', onclick: () => openEntry(e) }),
+        h('button', {
+          type: 'button',
+          class: `btn${e.pinned ? ' pin-on' : ''}`,
+          text: e.pinned ? 'Unpin' : 'Pin',
+          'aria-pressed': String(!!e.pinned),
+          onclick: () => {
+            history = updateEntry(e.id, { pinned: !e.pinned });
+            renderHistory();
+          },
+        }),
+        h('button', {
+          type: 'button',
+          class: 'btn danger',
+          text: 'Delete',
+          onclick: () => {
+            const wasEditing = draft.editingId === e.id;
+            history = removeEntry(e.id);
+            if (wasEditing) draft.editingId = null;
+            renderHistory();
+            updateEditState();
+            toast('Deleted.', {
+              action: 'Undo',
+              duration: 6000,
+              onAction: () => {
+                history = restoreEntry(e);
+                if (wasEditing && !draft.editingId) draft.editingId = e.id;
                 renderHistory();
                 updateEditState();
-                toast('Deleted.', {
-                  action: 'Undo',
-                  duration: 6000,
-                  onAction: () => {
-                    history = restoreEntry(e);
-                    if (wasEditing && !draft.editingId) draft.editingId = e.id;
-                    renderHistory();
-                    updateEditState();
-                  },
-                });
               },
-            }),
-          ),
-        ),
-      );
-    }),
+            });
+          },
+        }),
+      ),
+    ),
   );
 }
 
@@ -870,7 +922,11 @@ function openEntry(e: HistoryEntry): void {
 }
 
 function bindHistory(): void {
-  historySearch.addEventListener('input', renderHistory);
+  let searchTimer = 0;
+  historySearch.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => renderHistory(true), 120);
+  });
 
   $('history-export').addEventListener('click', () => {
     const date = new Date().toISOString().slice(0, 10);
@@ -884,10 +940,16 @@ function bindHistory(): void {
     fileInput.value = '';
     if (!file) return;
     try {
-      const { added, list } = importHistory(await file.text());
+      const { added, list, ok } = importHistory(await file.text());
       history = list;
       renderHistory();
-      toast(added ? `Imported ${added} code${added === 1 ? '' : 's'}.` : 'Nothing new to import.');
+      toast(
+        !ok
+          ? 'Not enough storage to import those codes.'
+          : added
+            ? `Imported ${added.toLocaleString()} code${added === 1 ? '' : 's'}.`
+            : 'Nothing new to import.',
+      );
     } catch (err) {
       toast(err instanceof Error && err.message.startsWith('No QR') ? err.message : 'That file isn’t a library export.');
     }
@@ -1081,7 +1143,7 @@ function showView(view: 'create' | 'history'): void {
   $('view-history').hidden = view !== 'history';
   $('tab-create').setAttribute('aria-selected', String(view === 'create'));
   $('tab-history').setAttribute('aria-selected', String(view === 'history'));
-  if (view === 'history') renderHistory();
+  if (view === 'history') renderHistory(true);
   else if (current) paintPreview();
 }
 

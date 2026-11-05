@@ -1,4 +1,4 @@
-// Local persistence: the in-progress draft and the history of generated codes.
+// Local persistence: the in-progress draft and the library of saved codes.
 import { QR_TYPES, TYPE_BY_ID, isQrTypeId, type Fields, type QrTypeId } from './qrtypes';
 import type { Style } from './render';
 
@@ -26,7 +26,10 @@ export interface HistoryEntry {
   description: string;
   showDescription: boolean;
   showDecoded: boolean;
-  /** The encoded payload, kept for search and de-duplication. */
+  /**
+   * The encoded payload. Derived from `type` + `fields` when the library is loaded and never
+   * persisted: only source data is stored, and codes are redrawn on demand.
+   */
   payload: string;
   pinned?: boolean;
   /** How the code entered the library. */
@@ -37,8 +40,10 @@ export interface HistoryEntry {
 export type EntryContent = Omit<HistoryEntry, 'id' | 'created' | 'updated' | 'pinned' | 'source'>;
 
 const DRAFT_KEY = 'qrb.draft.v1';
-const HISTORY_KEY = 'qrb.history.v1';
-export const HISTORY_LIMIT = 200;
+/** Library, stored compactly (source data only). */
+const LIBRARY_KEY = 'qrb.library.v2';
+/** Pre-1.2 format (full entries plus payload); migrated into LIBRARY_KEY on load. */
+const LEGACY_KEY = 'qrb.history.v1';
 
 export const DEFAULT_STYLE: Style = { fg: '#000000', bg: '#ffffff', transparent: true, ec: 'M', margin: 4 };
 
@@ -125,69 +130,151 @@ export function saveDraft(d: Draft): void {
   safeSet(DRAFT_KEY, JSON.stringify(d));
 }
 
-// ---------- history ----------
+// ---------- library ----------
+//
+// Storage format (v2): an array of compact records holding only what is needed to regenerate a
+// code. Nothing derived is stored: no images, and no encoded payload (re-encoded from the fields).
+// Empty strings and false booleans are omitted from `fields` (they are every type's "empty"
+// value), as are the optional flags below when they have their usual value. This keeps a typical
+// code to roughly 100-250 bytes, so localStorage (about 5 MB per site) holds tens of thousands.
 
+/**
+ * Baseline for stored styles: only properties that differ from it are written. This is part of the
+ * storage format and must never change (unlike DEFAULT_STYLE, which is just the editor's default).
+ */
+const STORED_STYLE_BASE: Readonly<Style> = Object.freeze({
+  fg: '#000000',
+  bg: '#ffffff',
+  transparent: true,
+  ec: 'M',
+  margin: 4,
+});
+
+interface StoredEntry {
+  id: string;
+  created: number;
+  updated: number;
+  type: QrTypeId;
+  /** Non-empty fields only. */
+  fields?: Fields;
+  /** Only properties that differ from STORED_STYLE_BASE. */
+  style?: Partial<Style>;
+  description?: string;
+  /** Present only when false. */
+  showDescription?: false;
+  /** Present only when true. */
+  showDecoded?: true;
+  pinned?: true;
+  source?: 'scan';
+}
+
+function toStored(e: HistoryEntry): StoredEntry {
+  const fields: Fields = {};
+  for (const [k, v] of Object.entries(e.fields)) if (v !== '' && v !== false) fields[k] = v;
+  const style: Partial<Style> = {};
+  for (const k of Object.keys(STORED_STYLE_BASE) as (keyof Style)[]) {
+    if (e.style[k] !== STORED_STYLE_BASE[k]) (style as Record<string, unknown>)[k] = e.style[k];
+  }
+  const out: StoredEntry = { id: e.id, created: e.created, updated: e.updated, type: e.type };
+  if (Object.keys(fields).length) out.fields = fields;
+  if (Object.keys(style).length) out.style = style;
+  if (e.description) out.description = e.description;
+  if (!e.showDescription) out.showDescription = false;
+  if (e.showDecoded) out.showDecoded = true;
+  if (e.pinned) out.pinned = true;
+  if (e.source) out.source = e.source;
+  return out;
+}
+
+/** Validate a stored (v2) or legacy (v1) record and regenerate its payload. */
 function sanitizeEntry(e: unknown): HistoryEntry | null {
   if (!e || typeof e !== 'object') return null;
   const o = e as Record<string, unknown>;
-  if (!isQrTypeId(o.type) || typeof o.payload !== 'string') return null;
+  if (!isQrTypeId(o.type)) return null;
+  const fields = sanitizeFields(o.type, o.fields);
+  let payload: string;
+  try {
+    payload = TYPE_BY_ID[o.type].encode(fields);
+  } catch {
+    return null; // not a usable code
+  }
   const now = Date.now();
   return {
     id: typeof o.id === 'string' && o.id ? o.id : newId(),
     created: typeof o.created === 'number' ? o.created : now,
     updated: typeof o.updated === 'number' ? o.updated : now,
     type: o.type,
-    fields: sanitizeFields(o.type, o.fields),
-    style: sanitizeStyle(o.style),
+    fields,
+    style: sanitizeStyle({ ...STORED_STYLE_BASE, ...(o.style && typeof o.style === 'object' ? o.style : {}) }),
     description: typeof o.description === 'string' ? o.description : '',
     showDescription: o.showDescription !== false,
     showDecoded: o.showDecoded === true,
-    payload: o.payload,
+    payload,
     pinned: o.pinned === true,
     source: o.source === 'scan' ? 'scan' : undefined,
   };
 }
 
+/** Short, unique-enough ids (time + randomness) to keep records small. */
 function newId(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const rand =
+    typeof crypto !== 'undefined' && 'getRandomValues' in crypto
+      ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(36)).join('')
+      : Math.random().toString(36).slice(2);
+  return Date.now().toString(36) + rand.slice(0, 8);
 }
 
-export function loadHistory(): HistoryEntry[] {
-  const raw = safeGet(HISTORY_KEY);
+function parseList(raw: string | null): HistoryEntry[] {
   if (!raw) return [];
   try {
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
-    return arr.map(sanitizeEntry).filter((e): e is HistoryEntry => !!e);
+    return Array.isArray(arr) ? arr.map(sanitizeEntry).filter((e): e is HistoryEntry => !!e) : [];
   } catch {
     return [];
   }
 }
 
-/** Saves, pruning the oldest unpinned entries if over the limit or out of quota. */
+const copy = (e: HistoryEntry): HistoryEntry => ({ ...e, fields: { ...e.fields }, style: { ...e.style } });
+
+// Parsing (and re-encoding) thousands of codes is cached until the stored string changes.
+let cache: { raw: string; list: HistoryEntry[] } | null = null;
+
+/** Move entries saved by earlier versions into the compact format, then drop the old copy. */
+function migrateLegacy(): void {
+  const legacy = safeGet(LEGACY_KEY);
+  if (legacy === null) return;
+  const current = parseList(safeGet(LIBRARY_KEY));
+  const byId = new Map(current.map((e) => [e.id, e]));
+  for (const e of parseList(legacy)) {
+    const have = byId.get(e.id);
+    if (!have || have.updated < e.updated) byId.set(e.id, e);
+  }
+  if (saveHistory([...byId.values()])) {
+    try {
+      localStorage.removeItem(LEGACY_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function loadHistory(): HistoryEntry[] {
+  migrateLegacy();
+  const raw = safeGet(LIBRARY_KEY) ?? '';
+  if (cache?.raw !== raw) cache = { raw, list: parseList(raw) };
+  return cache.list.map(copy);
+}
+
+/** Persist the whole library, newest first. Returns false if storage is full (nothing is pruned). */
 function saveHistory(list: HistoryEntry[]): boolean {
   list.sort((a, b) => b.updated - a.updated);
-  const prune = () => {
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (!list[i].pinned) {
-        list.splice(i, 1);
-        return true;
-      }
-    }
-    return false;
-  };
-  while (list.length > HISTORY_LIMIT && prune()) {
-    /* keep pruning */
-  }
-  while (!safeSet(HISTORY_KEY, JSON.stringify(list))) {
-    if (!prune()) return false;
-  }
+  const raw = JSON.stringify(list.map(toStored));
+  if (!safeSet(LIBRARY_KEY, raw)) return false;
+  cache = { raw, list: list.map(copy) };
   return true;
 }
 
-/** Content identity used to avoid duplicate history entries. */
+/** Content identity used to avoid duplicate entries. */
 export function sameContent(a: EntryContent, b: EntryContent): boolean {
   return (
     a.type === b.type &&
@@ -200,8 +287,10 @@ export function sameContent(a: EntryContent, b: EntryContent): boolean {
 }
 
 function nextTimestamp(list: HistoryEntry[]): number {
-  // Strictly increasing timestamps keep ordering (and pruning) well-defined for rapid saves.
-  return Math.max(Date.now(), ...list.map((e) => e.updated + 1));
+  // Strictly increasing timestamps keep ordering well-defined for rapid saves.
+  let max = 0;
+  for (const e of list) if (e.updated > max) max = e.updated;
+  return Math.max(Date.now(), max + 1);
 }
 
 /** Add a code, or bump an identical existing one. Returns the entry's id. */
@@ -250,44 +339,44 @@ export function reviseEntry(id: string, item: EntryContent): { list: HistoryEntr
 export function updateEntry(id: string, patch: Partial<Pick<HistoryEntry, 'pinned'>>): HistoryEntry[] {
   const list = loadHistory();
   const e = list.find((x) => x.id === id);
-  if (e) Object.assign(e, patch);
-  // Preserve ordering by `updated`: pinning is not a "use".
-  safeSet(HISTORY_KEY, JSON.stringify(list));
-  return list;
+  if (e) Object.assign(e, patch); // pinning is not a "use", so `updated` is unchanged
+  saveHistory(list);
+  return loadHistory();
 }
 
 export function removeEntry(id: string): HistoryEntry[] {
-  const list = loadHistory().filter((e) => e.id !== id);
-  safeSet(HISTORY_KEY, JSON.stringify(list));
-  return list;
+  saveHistory(loadHistory().filter((e) => e.id !== id));
+  return loadHistory();
 }
 
 /** Put back a previously removed entry (undo). */
 export function restoreEntry(e: HistoryEntry): HistoryEntry[] {
   const list = loadHistory().filter((x) => x.id !== e.id);
-  list.push(e);
+  list.push(copy(e));
   saveHistory(list);
   return loadHistory();
 }
 
 export function clearHistory(keepPinned: boolean): HistoryEntry[] {
-  const list = keepPinned ? loadHistory().filter((e) => e.pinned) : [];
-  safeSet(HISTORY_KEY, JSON.stringify(list));
-  return list;
+  saveHistory(keepPinned ? loadHistory().filter((e) => e.pinned) : []);
+  return loadHistory();
 }
 
+/** Bytes the library occupies in storage. */
 export function historyBytes(): number {
-  return new Blob([safeGet(HISTORY_KEY) ?? '']).size;
+  return new Blob([safeGet(LIBRARY_KEY) ?? '']).size;
 }
 
 export function exportHistory(): string {
-  return JSON.stringify({ app: 'qrcode-builder', version: 1, exported: new Date().toISOString(), entries: loadHistory() }, null, 2);
+  const entries = loadHistory().map(toStored);
+  return JSON.stringify({ app: 'qrcode-builder', version: 2, exported: new Date().toISOString(), entries }, null, 2);
 }
 
-/** Merge entries from an exported file. Returns the number of new entries added. */
-export function importHistory(json: string): { added: number; list: HistoryEntry[] } {
+/** Merge entries from an exported file (current or pre-1.2 format). Returns the number added. */
+export function importHistory(json: string): { added: number; list: HistoryEntry[]; ok: boolean } {
   const parsed = JSON.parse(json);
   const incoming: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.entries) ? parsed.entries : [];
+  if (!incoming.length) throw new Error('No QR code entries found in that file.');
   const list = loadHistory();
   let added = 0;
   for (const raw of incoming) {
@@ -297,7 +386,6 @@ export function importHistory(json: string): { added: number; list: HistoryEntry
     list.push(e);
     added++;
   }
-  if (!incoming.length) throw new Error('No QR code entries found in that file.');
-  saveHistory(list);
-  return { added, list: loadHistory() };
+  const ok = saveHistory(list);
+  return { added: ok ? added : 0, list: loadHistory(), ok };
 }

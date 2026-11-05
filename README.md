@@ -23,9 +23,12 @@ An offline-first Progressive Web App for making QR codes. No accounts, no ads, n
   - If the original has details the form can't represent (for example a second phone number or a recurrence rule), you're told what would be left out, and you can keep the exact original text instead.
   - Uses the browser's `BarcodeDetector` where available, otherwise [jsQR](https://github.com/cozmo/jsQR). Both work offline.
 - **Library:**
-  - Codes are saved when you save, download, copy, share or scan them. They're kept in `localStorage`, up to 200, oldest unpinned first out.
+  - Codes are saved when you save, download, copy, share or scan them.
+  - Only source data is stored: each code's type, non-empty fields, style and text options. No images and no encoded payload are kept, since everything is regenerated and redrawn on demand.
+  - A typical code takes about 100–250 bytes of `localStorage`, so the browser's roughly 5 MB per-site allowance holds tens of thousands. There's no count limit, and nothing is ever deleted automatically: if storage does fill up, the save fails with a message.
+  - The Library loads cards a page at a time as you scroll and draws each thumbnail only when it comes into view, so it stays fast with thousands of codes.
   - Every stored code can be revised: open it and your changes save back to the same code. "Save as copy" branches it, "New code" starts fresh, and you're warned before unsaved changes are discarded.
-  - Browse, search, pin (pinned codes are never pruned), delete with undo, clear, and export/import as JSON.
+  - Browse, search, pin, delete with undo, clear, and export/import as JSON.
 - **Offline:** a service worker precaches the whole app after the first visit, and it can be installed as an app.
 
 ## Development

@@ -720,6 +720,13 @@ input[type='range'] {
   border-color: var(--accent);
 }
 
+.history-more {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
 .empty-state {
   text-align: center;
   color: var(--muted);
