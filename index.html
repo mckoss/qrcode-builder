@@ -15,20 +15,36 @@
     <header class="app-header">
       <div class="brand">
         <img src="/favicon.svg" alt="" width="28" height="28" />
-        <span>QR Code Builder</span>
+        <span class="brand-name">QR Code Builder</span>
+        <span class="version" id="app-version"></span>
       </div>
       <nav class="tabs" role="tablist" aria-label="Views">
         <button type="button" role="tab" id="tab-create" aria-controls="view-create" aria-selected="true">Create</button>
         <button type="button" role="tab" id="tab-history" aria-controls="view-history" aria-selected="false">
-          History <span class="badge" id="history-count"></span>
+          Library <span class="badge" id="history-count"></span>
         </button>
       </nav>
+      <button type="button" class="btn small scan-open" id="scan-open" title="Scan a QR code with your camera">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+        <span>Scan</span>
+      </button>
       <button type="button" class="btn ghost small" id="install-btn" hidden>Install app</button>
     </header>
 
     <main>
       <section id="view-create" role="tabpanel" aria-labelledby="tab-create" class="create-layout">
         <div class="editor">
+          <div class="edit-banner" id="edit-banner" hidden>
+            <div class="edit-info">
+              <span class="edit-kicker" id="edit-kicker"></span>
+              <strong class="edit-title" id="edit-title"></strong>
+              <span class="edit-state" id="edit-state"></span>
+            </div>
+            <div class="edit-actions">
+              <button type="button" class="btn small" id="edit-copy">Save as copy</button>
+              <button type="button" class="btn small" id="edit-new">New code</button>
+            </div>
+          </div>
           <section class="card">
             <h2>Content</h2>
             <div class="type-picker" id="type-picker" role="radiogroup" aria-label="QR code type"></div>
@@ -129,7 +145,7 @@
                 <button type="button" class="btn" id="dl-svg">SVG</button>
                 <button type="button" class="btn" id="copy-png">Copy image</button>
                 <button type="button" class="btn" id="share-png" hidden>Share</button>
-                <button type="button" class="btn" id="save-history">Save to history</button>
+                <button type="button" class="btn" id="save-history">Save to library</button>
               </div>
             </div>
 
@@ -143,8 +159,9 @@
 
       <section id="view-history" role="tabpanel" aria-labelledby="tab-history" hidden>
         <div class="card history-toolbar">
-          <input type="search" id="history-search" placeholder="Search history" aria-label="Search history" />
+          <input type="search" id="history-search" placeholder="Search library" aria-label="Search library" />
           <div class="history-tools">
+            <button type="button" class="btn small" id="history-scan">Scan a code</button>
             <span class="muted" id="storage-usage"></span>
             <button type="button" class="btn small" id="history-export">Export</button>
             <button type="button" class="btn small" id="history-import">Import</button>
@@ -152,9 +169,9 @@
             <input type="file" id="history-file" accept="application/json,.json" hidden />
           </div>
         </div>
-        <p class="muted history-note">Codes are added here when you download, copy, share, or save them. Up to 200 are kept; pinned codes are never removed automatically.</p>
+        <p class="muted history-note">Codes are added when you save, download, copy, share or scan them. Open one to revise it; changes save back to the same code. Up to 200 are kept, and pinned codes are never removed automatically.</p>
         <ul class="history-list" id="history-list"></ul>
-        <p class="empty-state" id="history-empty" hidden>No saved codes yet.</p>
+        <p class="empty-state" id="history-empty" hidden></p>
       </section>
     </main>
 
@@ -165,7 +182,7 @@
 
     <dialog id="clear-dialog">
       <form method="dialog">
-        <h3>Clear history?</h3>
+        <h3>Clear library?</h3>
         <p>This permanently removes saved codes from this device.</p>
         <div class="dialog-actions">
           <button class="btn" value="cancel">Cancel</button>
@@ -173,6 +190,36 @@
           <button class="btn danger" value="all">Delete all</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="scan-dialog" class="scan-dialog" aria-labelledby="scan-heading">
+      <div class="scan-head">
+        <h3 id="scan-heading">Scan a QR code</h3>
+        <button type="button" class="btn small ghost" id="scan-close" aria-label="Close scanner">Close</button>
+      </div>
+      <div id="scan-live">
+        <div class="scan-view">
+          <video id="scan-video" playsinline muted></video>
+          <div class="scan-frame" aria-hidden="true"></div>
+        </div>
+        <p class="scan-status" id="scan-status" role="status"></p>
+        <div class="scan-actions">
+          <button type="button" class="btn" id="scan-switch" hidden>Switch camera</button>
+          <button type="button" class="btn" id="scan-file-btn">Scan from image…</button>
+          <input type="file" id="scan-file" accept="image/*" hidden />
+        </div>
+        <p class="hint scan-hint">You can also paste an image of a QR code.</p>
+      </div>
+      <div id="scan-result" class="scan-result" hidden>
+        <p class="scan-found">Found a <strong id="scan-type"></strong> code</p>
+        <pre id="scan-preview"></pre>
+        <p class="warning" id="scan-dropped" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="btn" id="scan-again">Scan again</button>
+          <button type="button" class="btn" id="scan-as-text">Keep exact text</button>
+          <button type="button" class="btn primary" id="scan-accept">Add to library &amp; edit</button>
+        </div>
+      </div>
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

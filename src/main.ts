@@ -1,7 +1,8 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import { CapacityError, makeMatrix, type EcLevel, type Matrix } from './qr';
-import { QR_TYPES, TYPE_BY_ID, ValidationError, type FieldDef, type QrTypeDef } from './qrtypes';
+import { parsePayload, type Parsed } from './parse';
+import { QR_TYPES, TYPE_BY_ID, ValidationError, type FieldDef, type Fields, type QrTypeDef, type QrTypeId } from './qrtypes';
 import {
   canvasMeasure,
   computeLayout,
@@ -12,9 +13,11 @@ import {
   renderThumb,
   type TextSpec,
 } from './render';
+import { cameraErrorMessage, CameraScanner, decodeImage, listCameras } from './scan';
 import {
   addToHistory,
   clearHistory,
+  DEFAULT_STYLE,
   exportHistory,
   HISTORY_LIMIT,
   historyBytes,
@@ -23,8 +26,11 @@ import {
   loadHistory,
   removeEntry,
   restoreEntry,
+  reviseEntry,
+  sameContent,
   saveDraft,
   updateEntry,
+  type EntryContent,
   type HistoryEntry,
 } from './store';
 
@@ -114,6 +120,15 @@ function persistDraft(): void {
   saveTimer = window.setTimeout(() => saveDraft(draft), 250);
 }
 
+function flushDraft(): void {
+  clearTimeout(saveTimer);
+  saveDraft(draft);
+}
+
+// Don't lose the last keystrokes if the app is closed or backgrounded within the debounce window.
+window.addEventListener('pagehide', flushDraft);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && flushDraft());
+
 // ---------- type picker & fields ----------
 
 const typePicker = $('type-picker');
@@ -153,6 +168,18 @@ function syncTypePicker(): void {
 
 function selectType(id: QrTypeDef['id']): void {
   if (draft.type === id) return;
+  const editing = editingEntry();
+  if (editing) {
+    // A different type is a different code: never overwrite the library entry being edited.
+    if (!confirmDiscard()) {
+      syncTypePicker();
+      return;
+    }
+    draft.editingId = null;
+    draft.description = '';
+    syncControls();
+    toast(`Started a new ${TYPE_BY_ID[id].label} code. “${entryLabel(editing)}” is still in your library.`);
+  }
   draft.type = id;
   syncTypePicker();
   buildFields();
@@ -485,6 +512,7 @@ function compute(): void {
     $('meta').textContent = '';
     $('output-size').textContent = '';
   }
+  updateEditState();
 }
 
 /** Show the exact PNG dimensions and the (approximate, font-dependent) PDF page size. */
@@ -529,22 +557,124 @@ function pngBlob(c: Current): Promise<Blob> {
 
 const fileBase = (c: Current) => `qr-${slug(c.label)}`;
 
-function recordHistory(): void {
-  if (!current) return;
-  const { list, ok } = addToHistory({
+// ---------- library: saving and revising ----------
+
+function currentContent(): EntryContent | null {
+  if (!current) return null;
+  return {
     type: current.def.id,
-    fields: draft.data[current.def.id],
+    fields: { ...draft.data[current.def.id] },
     style: { ...draft.style },
     description: draft.description,
     showDescription: draft.showDescription,
     showDecoded: draft.showDecoded,
     payload: current.payload,
-  });
-  history = list;
-  if (!ok) toast('Storage is full — couldn’t save to history. Delete some entries.');
+  };
+}
+
+/** The library entry the editor is revising, if it still exists. */
+function editingEntry(): HistoryEntry | undefined {
+  if (!draft.editingId) return undefined;
+  const e = history.find((x) => x.id === draft.editingId);
+  if (!e) draft.editingId = null; // deleted elsewhere: the editor now holds a new, unsaved code
+  return e;
+}
+
+function isDirty(): boolean {
+  const e = editingEntry();
+  const c = currentContent();
+  return !e || !c || !sameContent(e, c);
+}
+
+/**
+ * Save the editor's code to the library. When revising an entry, the entry is updated in place;
+ * otherwise a new entry is created (or an identical one reused) and the editor attaches to it.
+ */
+function saveCurrent(opts: { asCopy?: boolean } = {}): boolean {
+  const content = currentContent();
+  if (!content) return false;
+  let ok = true;
+  const revised = draft.editingId && !opts.asCopy ? reviseEntry(draft.editingId, content) : null;
+  if (revised) {
+    history = revised.list;
+    ok = revised.ok;
+  } else {
+    const added = addToHistory(content, { dedupe: !opts.asCopy });
+    history = added.list;
+    ok = added.ok;
+    draft.editingId = added.id;
+  }
+  if (!ok) toast('Storage is full — couldn’t save to the library. Delete some codes.');
+  flushDraft();
   renderHistoryCount();
+  updateEditState();
   // Ask the browser not to evict our storage (best effort, silent).
   navigator.storage?.persist?.().catch(() => {});
+  return ok;
+}
+
+/** Exports also save: they create the code in the library, or record the revision being exported. */
+function recordHistory(): void {
+  saveCurrent();
+}
+
+function updateEditState(): void {
+  const e = editingEntry();
+  const dirty = isDirty();
+  const banner = $('edit-banner');
+  banner.hidden = !e;
+  const saveBtn = $<HTMLButtonElement>('save-history');
+  if (e) {
+    $('edit-kicker').textContent = e.source === 'scan' ? 'Scanned code · in your library' : 'Editing library code';
+    $('edit-title').textContent = entryLabel(e);
+    const state = $('edit-state');
+    state.textContent = !current
+      ? 'Incomplete — fix the content to save'
+      : dirty
+        ? 'Unsaved changes'
+        : `Saved ${new Date(e.updated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+    state.classList.toggle('dirty', dirty);
+    saveBtn.textContent = dirty ? 'Save changes' : 'Saved';
+    saveBtn.disabled = !current || !dirty;
+    $<HTMLButtonElement>('edit-copy').disabled = !current;
+  } else {
+    saveBtn.textContent = 'Save to library';
+    saveBtn.disabled = !current;
+  }
+}
+
+/** Ask before throwing away unsaved revisions of a library code. */
+function confirmDiscard(): boolean {
+  const e = editingEntry();
+  if (!e || !isDirty()) return true;
+  return window.confirm(`Discard unsaved changes to “${entryLabel(e)}”?`);
+}
+
+function loadIntoEditor(e: HistoryEntry): void {
+  draft.editingId = e.id;
+  draft.type = e.type;
+  draft.data[e.type] = { ...TYPE_BY_ID[e.type].defaults, ...e.fields };
+  draft.style = { ...e.style };
+  draft.description = e.description;
+  draft.showDescription = e.showDescription;
+  draft.showDecoded = e.showDecoded;
+  syncControls();
+  syncTypePicker();
+  buildFields();
+  showView('create');
+  update();
+  window.scrollTo({ top: 0 });
+}
+
+function startNewCode(): void {
+  if (!confirmDiscard()) return;
+  draft.editingId = null;
+  draft.data[draft.type] = { ...TYPE_BY_ID[draft.type].defaults };
+  draft.description = '';
+  syncControls();
+  buildFields();
+  update();
+  (fieldsForm.querySelector('input, textarea, select') as HTMLElement | null)?.focus();
 }
 
 function bindExports(): void {
@@ -615,9 +745,14 @@ function bindExports(): void {
 
   $('save-history').addEventListener('click', () => {
     if (!current) return;
-    recordHistory();
-    toast('Saved to history.');
+    const wasEditing = !!editingEntry();
+    if (saveCurrent()) toast(wasEditing ? 'Changes saved.' : 'Saved to your library.');
   });
+  $('edit-copy').addEventListener('click', () => {
+    if (!current) return;
+    if (saveCurrent({ asCopy: true })) toast('Saved as a new code. You’re now editing the copy.');
+  });
+  $('edit-new').addEventListener('click', startNewCode);
 }
 
 // ---------- history view ----------
@@ -648,7 +783,9 @@ function renderHistory(): void {
   const kb = historyBytes() / 1024;
   $('storage-usage').textContent = `${history.length} of ${HISTORY_LIMIT} · ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
   $('history-empty').hidden = items.length > 0;
-  $('history-empty').textContent = history.length ? 'No matches.' : 'No saved codes yet.';
+  $('history-empty').textContent = history.length
+    ? 'No matches.'
+    : 'No saved codes yet. Create one, or scan an existing code to clone it.';
 
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   historyList.replaceChildren(
@@ -660,24 +797,34 @@ function renderHistory(): void {
         /* unrenderable entry: leave blank */
       }
       const date = new Date(e.updated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      const isEditing = e.id === draft.editingId;
       return h(
         'li',
-        { class: 'history-item' },
+        { class: `history-item${isEditing ? ' editing' : ''}` },
         h(
           'button',
-          { type: 'button', class: 'thumb', title: 'Open', 'aria-label': `Open ${entryLabel(e)}`, onclick: () => openEntry(e) },
+          { type: 'button', class: 'thumb', title: 'Edit', 'aria-label': `Edit ${entryLabel(e)}`, onclick: () => openEntry(e) },
           canvas,
         ),
         h(
           'div',
           { class: 'history-body' },
-          h('div', { class: 'history-title', title: entryLabel(e), text: (e.pinned ? '📌 ' : '') + entryLabel(e) }),
-          h('div', { class: 'history-sub', text: `${TYPE_BY_ID[e.type].label} · ${date}` }),
+          h(
+            'div',
+            { class: 'history-title', title: entryLabel(e) },
+            (e.pinned ? '📌 ' : '') + entryLabel(e),
+            isEditing ? h('span', { class: 'tag', text: 'Editing' }) : null,
+          ),
+          h(
+            'div',
+            { class: 'history-sub' },
+            `${TYPE_BY_ID[e.type].label}${e.source === 'scan' ? ' · Scanned' : ''} · ${date}`,
+          ),
           h('div', { class: 'history-sub', title: e.payload, text: e.payload.replace(/\s+/g, ' ') }),
           h(
             'div',
             { class: 'history-actions' },
-            h('button', { type: 'button', class: 'btn', text: 'Open', onclick: () => openEntry(e) }),
+            h('button', { type: 'button', class: 'btn', text: 'Edit', onclick: () => openEntry(e) }),
             h('button', {
               type: 'button',
               class: `btn${e.pinned ? ' pin-on' : ''}`,
@@ -693,14 +840,19 @@ function renderHistory(): void {
               class: 'btn danger',
               text: 'Delete',
               onclick: () => {
+                const wasEditing = draft.editingId === e.id;
                 history = removeEntry(e.id);
+                if (wasEditing) draft.editingId = null;
                 renderHistory();
+                updateEditState();
                 toast('Deleted.', {
                   action: 'Undo',
                   duration: 6000,
                   onAction: () => {
                     history = restoreEntry(e);
+                    if (wasEditing && !draft.editingId) draft.editingId = e.id;
                     renderHistory();
+                    updateEditState();
                   },
                 });
               },
@@ -713,18 +865,8 @@ function renderHistory(): void {
 }
 
 function openEntry(e: HistoryEntry): void {
-  draft.type = e.type;
-  draft.data[e.type] = { ...e.fields };
-  draft.style = { ...e.style };
-  draft.description = e.description;
-  draft.showDescription = e.showDescription;
-  draft.showDecoded = e.showDecoded;
-  syncControls();
-  syncTypePicker();
-  buildFields();
-  showView('create');
-  update();
-  window.scrollTo({ top: 0 });
+  if (e.id !== draft.editingId && !confirmDiscard()) return;
+  loadIntoEditor(e);
 }
 
 function bindHistory(): void {
@@ -732,7 +874,7 @@ function bindHistory(): void {
 
   $('history-export').addEventListener('click', () => {
     const date = new Date().toISOString().slice(0, 10);
-    download(new Blob([exportHistory()], { type: 'application/json' }), `qr-history-${date}.json`);
+    download(new Blob([exportHistory()], { type: 'application/json' }), `qr-library-${date}.json`);
   });
 
   const fileInput = $<HTMLInputElement>('history-file');
@@ -747,7 +889,7 @@ function bindHistory(): void {
       renderHistory();
       toast(added ? `Imported ${added} code${added === 1 ? '' : 's'}.` : 'Nothing new to import.');
     } catch (err) {
-      toast(err instanceof Error && err.message.startsWith('No QR') ? err.message : 'That file isn’t a history export.');
+      toast(err instanceof Error && err.message.startsWith('No QR') ? err.message : 'That file isn’t a library export.');
     }
   });
 
@@ -761,7 +903,8 @@ function bindHistory(): void {
     if (dialog.returnValue === 'all' || dialog.returnValue === 'unpinned') {
       history = clearHistory(dialog.returnValue === 'unpinned');
       renderHistory();
-      toast('History cleared.');
+      updateEditState();
+      toast('Library cleared.');
     }
   });
 
@@ -771,8 +914,164 @@ function bindHistory(): void {
       history = loadHistory();
       if (!$('view-history').hidden) renderHistory();
       else renderHistoryCount();
+      updateEditState();
     }
   });
+}
+
+// ---------- scanning (clone an existing code) ----------
+
+const scanDialog = $<HTMLDialogElement>('scan-dialog');
+const scanVideo = $<HTMLVideoElement>('scan-video');
+const scanStatus = $('scan-status');
+let scanner: CameraScanner | null = null;
+let scanned: { payload: string; parsed: Parsed } | null = null;
+
+function setScanStatus(msg: string): void {
+  scanStatus.textContent = msg;
+}
+
+async function startCamera(deviceId?: string): Promise<void> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setScanStatus(
+      window.isSecureContext
+        ? 'This browser can’t use the camera. You can scan a code from an image instead.'
+        : 'The camera needs a secure (https) connection. You can scan a code from an image instead.',
+    );
+    return;
+  }
+  setScanStatus('Starting camera…');
+  try {
+    scanner ??= new CameraScanner(scanVideo, (text) => {
+      navigator.vibrate?.(40);
+      showScanResult(text);
+    });
+    await scanner.start(deviceId);
+    if (!scanDialog.open) {
+      scanner.stop();
+      return;
+    }
+    setScanStatus('Point your camera at a QR code.');
+    const cams = await listCameras().catch(() => []);
+    $('scan-switch').hidden = cams.length < 2;
+  } catch (err) {
+    console.warn(err);
+    setScanStatus(cameraErrorMessage(err));
+  }
+}
+
+function openScanner(): void {
+  scanned = null;
+  $('scan-live').hidden = false;
+  $('scan-result').hidden = true;
+  setScanStatus('');
+  scanDialog.showModal();
+  void startCamera();
+}
+
+function showScanResult(payload: string): void {
+  scanner?.stop();
+  const parsed = parsePayload(payload);
+  scanned = { payload, parsed };
+  const def = TYPE_BY_ID[parsed.type];
+  $('scan-type').textContent = def.label;
+  $('scan-preview').textContent = parsed.type === 'text' ? payload : def.decoded(parsed.fields) || payload;
+  const dropped = $('scan-dropped');
+  dropped.hidden = !parsed.dropped.length;
+  dropped.textContent = parsed.dropped.length
+    ? `These details can’t be edited and will be left out: ${parsed.dropped.join(', ')}. Choose “Keep exact text” to preserve the original exactly.`
+    : '';
+  $('scan-as-text').hidden = parsed.type === 'text';
+  $('scan-accept').textContent = parsed.type === 'text' ? 'Add to library & edit' : `Add as ${def.label} & edit`;
+  $('scan-live').hidden = true;
+  $('scan-result').hidden = false;
+  ($('scan-accept') as HTMLButtonElement).focus();
+}
+
+async function scanFile(file: Blob): Promise<void> {
+  setScanStatus('Looking for a QR code…');
+  try {
+    const text = await decodeImage(file);
+    if (text) showScanResult(text);
+    else setScanStatus('No QR code found in that image. Try a sharper or closer picture.');
+  } catch (err) {
+    console.warn(err);
+    setScanStatus('Couldn’t read that image.');
+  }
+}
+
+/** Put a scanned code into the library and open it for editing. */
+function addScanned(type: QrTypeId, fields: Fields): void {
+  if (!confirmDiscard()) return;
+  const def = TYPE_BY_ID[type];
+  const full = { ...def.defaults, ...fields };
+  let payload: string;
+  try {
+    payload = def.encode(full);
+    makeMatrix(payload, DEFAULT_STYLE.ec);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : 'Couldn’t use that code.');
+    return;
+  }
+  const { list, id, ok } = addToHistory(
+    {
+      type,
+      fields: full,
+      style: { ...DEFAULT_STYLE },
+      description: '',
+      showDescription: true,
+      showDecoded: false,
+      payload,
+    },
+    { source: 'scan' },
+  );
+  history = list;
+  if (!ok) toast('Storage is full — delete some codes first.');
+  scanDialog.close();
+  const entry = history.find((e) => e.id === id);
+  if (entry) {
+    loadIntoEditor(entry);
+    toast('Added to your library. Edit away — changes save to this code.');
+  }
+}
+
+function bindScanner(): void {
+  $('scan-open').addEventListener('click', openScanner);
+  $('history-scan').addEventListener('click', openScanner);
+  $('scan-close').addEventListener('click', () => scanDialog.close());
+  scanDialog.addEventListener('close', () => scanner?.stop());
+
+  $('scan-switch').addEventListener('click', async () => {
+    const cams = await listCameras().catch(() => []);
+    if (cams.length < 2) return;
+    const i = cams.findIndex((c) => c.deviceId === scanner?.deviceId);
+    void startCamera(cams[(i + 1) % cams.length].deviceId);
+  });
+
+  const fileInput = $<HTMLInputElement>('scan-file');
+  $('scan-file-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (file) void scanFile(file);
+  });
+  scanDialog.addEventListener('paste', (e) => {
+    const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
+    const file = item?.getAsFile();
+    if (file) {
+      e.preventDefault();
+      void scanFile(file);
+    }
+  });
+
+  $('scan-again').addEventListener('click', () => {
+    scanned = null;
+    $('scan-live').hidden = false;
+    $('scan-result').hidden = true;
+    void startCamera(scanner?.deviceId);
+  });
+  $('scan-accept').addEventListener('click', () => scanned && addScanned(scanned.parsed.type, scanned.parsed.fields));
+  $('scan-as-text').addEventListener('click', () => scanned && addScanned('text', { text: scanned.payload }));
 }
 
 // ---------- views ----------
@@ -821,6 +1120,9 @@ function setupPwa(): void {
 
 // ---------- init ----------
 
+$('app-version').textContent = `v${__APP_VERSION__}`;
+$('app-version').title = `QR Code Builder version ${__APP_VERSION__}`;
+
 buildTypePicker();
 syncTypePicker();
 buildFields();
@@ -828,6 +1130,7 @@ syncControls();
 bindControls();
 bindExports();
 bindHistory();
+bindScanner();
 $('tab-create').addEventListener('click', () => showView('create'));
 $('tab-history').addEventListener('click', () => showView('history'));
 renderHistoryCount();

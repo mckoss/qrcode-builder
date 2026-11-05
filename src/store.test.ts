@@ -87,4 +87,25 @@ describe('history', () => {
     expect(d.style.fg).toBe('#000000');
     expect(d.style.margin).toBe(4);
   });
+
+  it('revises entries in place, keeping identity, pin and source', () => {
+    const { id } = store.addToHistory(item('v1'), { source: 'scan' });
+    store.updateEntry(id, { pinned: true });
+    const before = store.getEntry(id)!;
+    const r = store.reviseEntry(id, { ...item('v2'), description: 'Renamed' });
+    expect(r).not.toBeNull();
+    const after = store.getEntry(id)!;
+    expect(store.loadHistory()).toHaveLength(1);
+    expect(after).toMatchObject({ id, payload: 'v2', description: 'Renamed', pinned: true, source: 'scan', created: before.created });
+    expect(after.updated).toBeGreaterThan(before.updated);
+    expect(store.reviseEntry('missing', item('x'))).toBeNull();
+  });
+
+  it('can save an identical copy when asked', () => {
+    const a = store.addToHistory(item('same'));
+    const b = store.addToHistory(item('same'), { dedupe: false });
+    expect(a.id).not.toBe(b.id);
+    expect(store.loadHistory()).toHaveLength(2);
+    expect(store.addToHistory(item('same')).list).toHaveLength(2);
+  });
 });

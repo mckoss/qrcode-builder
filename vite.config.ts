@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -5,8 +6,14 @@ import { VitePWA } from 'vite-plugin-pwa';
 // GitHub Pages serves project sites from /<repo>/; the deploy workflow sets BASE_PATH.
 const base = process.env.BASE_PATH || '/';
 
+// Single source of truth for the app version (semver): package.json.
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+
 export default defineConfig({
   base,
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+  },
   resolve: {
     alias: Object.fromEntries(
       ['html2canvas', 'dompurify', 'canvg'].map((m) => [m, fileURLToPath(new URL('./src/stubs/unused.ts', import.meta.url))]),
