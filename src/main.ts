@@ -1120,6 +1120,9 @@ function setupPwa(): void {
 
 // ---------- init ----------
 
+$('app-version').textContent = `v${__APP_VERSION__}`;
+$('app-version').title = `QR Code Builder version ${__APP_VERSION__}`;
+
 buildTypePicker();
 syncTypePicker();
 buildFields();
