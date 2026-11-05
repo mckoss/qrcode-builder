@@ -23,9 +23,16 @@ An offline-first Progressive Web App for making QR codes. No accounts, no ads, n
   - If the original has details the form can't represent (for example a second phone number or a recurrence rule), you're told what would be left out, and you can keep the exact original text instead.
   - Uses the browser's `BarcodeDetector` where available, otherwise [jsQR](https://github.com/cozmo/jsQR). Both work offline.
 - **Library:**
-  - Codes are saved when you save, download, copy, share or scan them. They're kept in `localStorage`, up to 200, oldest unpinned first out.
+  - Codes are saved when you save, download, copy, share or scan them.
+  - Only source data is stored: each code's type, non-empty fields, style and text options. No images and no encoded payload are kept, since everything is regenerated and redrawn on demand.
+  - A typical code is a few hundred bytes. The app is designed for libraries of hundreds of codes, and the browser's roughly 5 MB per-site `localStorage` holds far more. There's no count limit, and nothing is ever deleted automatically: if storage does fill up, the save fails with a message.
   - Every stored code can be revised: open it and your changes save back to the same code. "Save as copy" branches it, "New code" starts fresh, and you're warned before unsaved changes are discarded.
-  - Browse, search, pin (pinned codes are never pruned), delete with undo, clear, and export/import as JSON.
+  - Browse, search, pin, delete with undo, and clear.
+  - **Export** saves the whole library as one JSON file. **Import** merges such a file without creating duplicates:
+    - Codes already in the library, or repeated within the file, are skipped.
+    - If the file has a newer revision of a code you already have (the same code edited on another device), it replaces the older one.
+    - A pin on either side is kept.
+    - Exports from earlier versions can be imported.
 - **Offline:** a service worker precaches the whole app after the first visit, and it can be installed as an app.
 
 ## Development

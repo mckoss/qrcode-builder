@@ -19,7 +19,6 @@ import {
   clearHistory,
   DEFAULT_STYLE,
   exportHistory,
-  HISTORY_LIMIT,
   historyBytes,
   importHistory,
   loadDraft,
@@ -761,12 +760,31 @@ const historyList = $('history-list');
 const historySearch = $<HTMLInputElement>('history-search');
 
 function renderHistoryCount(): void {
-  $('history-count').textContent = history.length ? String(history.length) : '';
+  $('history-count').textContent = history.length ? history.length.toLocaleString() : '';
 }
 
 function entryLabel(e: HistoryEntry): string {
   return e.description.trim().split('\n')[0] || TYPE_BY_ID[e.type].summary(e.fields);
 }
+
+// Thumbnails are drawn from each code's source data when they scroll into view.
+const thumbObserver = new IntersectionObserver(
+  (entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      const canvas = en.target as HTMLCanvasElement & { entry?: HistoryEntry };
+      thumbObserver.unobserve(canvas);
+      const e = canvas.entry;
+      if (!e) continue;
+      try {
+        renderThumb(canvas, makeMatrix(e.payload, e.style.ec), e.style, Math.round(84 * Math.min(window.devicePixelRatio || 1, 3)));
+      } catch {
+        /* unrenderable entry: leave blank */
+      }
+    }
+  },
+  { rootMargin: '400px 0px' },
+);
 
 function renderHistory(): void {
   renderHistoryCount();
@@ -781,86 +799,84 @@ function renderHistory(): void {
     );
 
   const kb = historyBytes() / 1024;
-  $('storage-usage').textContent = `${history.length} of ${HISTORY_LIMIT} · ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const size = kb < 10 ? `${kb.toFixed(1)} KB` : kb < 1024 ? `${Math.round(kb)} KB` : `${(kb / 1024).toFixed(1)} MB`;
+  $('storage-usage').textContent = `${history.length.toLocaleString()} code${history.length === 1 ? '' : 's'} · ${size}`;
   $('history-empty').hidden = items.length > 0;
   $('history-empty').textContent = history.length
     ? 'No matches.'
     : 'No saved codes yet. Create one, or scan an existing code to clone it.';
 
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
-  historyList.replaceChildren(
-    ...items.map((e) => {
-      const canvas = h('canvas');
-      try {
-        renderThumb(canvas, makeMatrix(e.payload, e.style.ec), e.style, Math.round(84 * dpr));
-      } catch {
-        /* unrenderable entry: leave blank */
-      }
-      const date = new Date(e.updated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-      const isEditing = e.id === draft.editingId;
-      return h(
-        'li',
-        { class: `history-item${isEditing ? ' editing' : ''}` },
-        h(
-          'button',
-          { type: 'button', class: 'thumb', title: 'Edit', 'aria-label': `Edit ${entryLabel(e)}`, onclick: () => openEntry(e) },
-          canvas,
-        ),
-        h(
-          'div',
-          { class: 'history-body' },
-          h(
-            'div',
-            { class: 'history-title', title: entryLabel(e) },
-            (e.pinned ? '📌 ' : '') + entryLabel(e),
-            isEditing ? h('span', { class: 'tag', text: 'Editing' }) : null,
-          ),
-          h(
-            'div',
-            { class: 'history-sub' },
-            `${TYPE_BY_ID[e.type].label}${e.source === 'scan' ? ' · Scanned' : ''} · ${date}`,
-          ),
-          h('div', { class: 'history-sub', title: e.payload, text: e.payload.replace(/\s+/g, ' ') }),
-          h(
-            'div',
-            { class: 'history-actions' },
-            h('button', { type: 'button', class: 'btn', text: 'Edit', onclick: () => openEntry(e) }),
-            h('button', {
-              type: 'button',
-              class: `btn${e.pinned ? ' pin-on' : ''}`,
-              text: e.pinned ? 'Unpin' : 'Pin',
-              'aria-pressed': String(!!e.pinned),
-              onclick: () => {
-                history = updateEntry(e.id, { pinned: !e.pinned });
-                renderHistory();
-              },
-            }),
-            h('button', {
-              type: 'button',
-              class: 'btn danger',
-              text: 'Delete',
-              onclick: () => {
-                const wasEditing = draft.editingId === e.id;
-                history = removeEntry(e.id);
-                if (wasEditing) draft.editingId = null;
+  for (const c of historyList.querySelectorAll('canvas')) thumbObserver.unobserve(c);
+  historyList.replaceChildren(...items.map(historyCard));
+}
+
+function historyCard(e: HistoryEntry): HTMLLIElement {
+  const canvas = h('canvas', { width: 1, height: 1 }) as HTMLCanvasElement & { entry?: HistoryEntry };
+  canvas.entry = e;
+  thumbObserver.observe(canvas);
+  const date = new Date(e.updated).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const isEditing = e.id === draft.editingId;
+  return h(
+    'li',
+    { class: `history-item${isEditing ? ' editing' : ''}` },
+    h(
+      'button',
+      { type: 'button', class: 'thumb', title: 'Edit', 'aria-label': `Edit ${entryLabel(e)}`, onclick: () => openEntry(e) },
+      canvas,
+    ),
+    h(
+      'div',
+      { class: 'history-body' },
+      h(
+        'div',
+        { class: 'history-title', title: entryLabel(e) },
+        (e.pinned ? '📌 ' : '') + entryLabel(e),
+        isEditing ? h('span', { class: 'tag', text: 'Editing' }) : null,
+      ),
+      h(
+        'div',
+        { class: 'history-sub' },
+        `${TYPE_BY_ID[e.type].label}${e.source === 'scan' ? ' · Scanned' : ''} · ${date}`,
+      ),
+      h('div', { class: 'history-sub', title: e.payload, text: e.payload.replace(/\s+/g, ' ') }),
+      h(
+        'div',
+        { class: 'history-actions' },
+        h('button', { type: 'button', class: 'btn', text: 'Edit', onclick: () => openEntry(e) }),
+        h('button', {
+          type: 'button',
+          class: `btn${e.pinned ? ' pin-on' : ''}`,
+          text: e.pinned ? 'Unpin' : 'Pin',
+          'aria-pressed': String(!!e.pinned),
+          onclick: () => {
+            history = updateEntry(e.id, { pinned: !e.pinned });
+            renderHistory();
+          },
+        }),
+        h('button', {
+          type: 'button',
+          class: 'btn danger',
+          text: 'Delete',
+          onclick: () => {
+            const wasEditing = draft.editingId === e.id;
+            history = removeEntry(e.id);
+            if (wasEditing) draft.editingId = null;
+            renderHistory();
+            updateEditState();
+            toast('Deleted.', {
+              action: 'Undo',
+              duration: 6000,
+              onAction: () => {
+                history = restoreEntry(e);
+                if (wasEditing && !draft.editingId) draft.editingId = e.id;
                 renderHistory();
                 updateEditState();
-                toast('Deleted.', {
-                  action: 'Undo',
-                  duration: 6000,
-                  onAction: () => {
-                    history = restoreEntry(e);
-                    if (wasEditing && !draft.editingId) draft.editingId = e.id;
-                    renderHistory();
-                    updateEditState();
-                  },
-                });
               },
-            }),
-          ),
-        ),
-      );
-    }),
+            });
+          },
+        }),
+      ),
+    ),
   );
 }
 
@@ -884,10 +900,25 @@ function bindHistory(): void {
     fileInput.value = '';
     if (!file) return;
     try {
-      const { added, list } = importHistory(await file.text());
-      history = list;
+      const r = importHistory(await file.text());
+      history = r.list;
       renderHistory();
-      toast(added ? `Imported ${added} code${added === 1 ? '' : 's'}.` : 'Nothing new to import.');
+      updateEditState();
+      const n = (k: number, word: string) => `${k.toLocaleString()} ${word}`;
+      const parts = [
+        r.added && n(r.added, `new code${r.added === 1 ? '' : 's'} added`),
+        r.updated && n(r.updated, `code${r.updated === 1 ? '' : 's'} updated to a newer version`),
+        r.duplicates && n(r.duplicates, `duplicate${r.duplicates === 1 ? '' : 's'} skipped`),
+        r.invalid && n(r.invalid, `unreadable entr${r.invalid === 1 ? 'y' : 'ies'} ignored`),
+      ].filter(Boolean);
+      toast(
+        !r.ok
+          ? 'Not enough storage to import those codes. Nothing was changed.'
+          : r.added || r.updated
+            ? `Import complete: ${parts.join(', ')}.`
+            : `Nothing new to import (${parts.join(', ')}).`,
+        { duration: 6000 },
+      );
     } catch (err) {
       toast(err instanceof Error && err.message.startsWith('No QR') ? err.message : 'That file isn’t a library export.');
     }

@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/). The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] - 2026-11-05
+
+### Changed
+- The library stores only each code's source data (type, non-empty fields, style and text options). The encoded payload is no longer stored; it's regenerated on load, and codes are always redrawn on demand. A typical code takes a few hundred bytes.
+- The 200-code limit is removed, and codes are never pruned automatically. If browser storage is full, the save fails with a message instead of deleting older codes.
+- Library thumbnails are drawn as they scroll into view.
+- Library exports use the compact format (version 2). Older exports still import.
+- Importing a library never adds duplicates: codes already present, or repeated within the file, are skipped. A newer revision of a code you already have replaces the older one. The result message reports how many codes were added, updated, skipped or unreadable.
+
+### Migration
+- Libraries saved by 1.0–1.1 are converted to the compact format on first load, and the old copy is removed.
+
 ## [1.1.0] - 2026-11-05
 
 ### Added
@@ -27,5 +39,6 @@ All notable changes to this project are documented here. This project follows [S
 - Export to PNG, PDF (page cropped to the content, vector modules) and SVG, plus copy and share.
 - History of generated codes in local storage, with search, pin, delete with undo, and JSON export/import.
 
-[1.1.0]: https://github.com/mckoss/qrcode-builder/compare/367cb8f...v1.1.0
+[1.2.0]: https://github.com/mckoss/qrcode-builder/compare/d4483ec...v1.2.0
+[1.1.0]: https://github.com/mckoss/qrcode-builder/compare/367cb8f...d4483ec
 [1.0.0]: https://github.com/mckoss/qrcode-builder/tree/367cb8f
