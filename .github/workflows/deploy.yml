@@ -30,14 +30,36 @@ jobs:
         env:
           # Project pages are served from https://<owner>.github.io/<repo>/
           BASE_PATH: /${{ github.event.repository.name }}/
-      - if: github.event_name != 'pull_request'
+      # Only main is published (PRs and manual runs on other branches just test).
+      - if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v4
         with:
           path: dist
 
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit -p e2e
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
   deploy:
-    if: github.event_name != 'pull_request'
-    needs: build
+    if: github.ref == 'refs/heads/main'
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
