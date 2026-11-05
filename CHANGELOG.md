@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/). The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.1] - 2026-11-05
+
+### Fixed
+- The Library tab's count now updates right after a scanned code is added.
+
+### Added
+- An end-to-end browser test suite (Playwright) that runs in CI on every push and pull request. Deploys wait for it to pass.
+
 ## [1.2.0] - 2026-11-05
 
 ### Changed
@@ -39,6 +47,7 @@ All notable changes to this project are documented here. This project follows [S
 - Export to PNG, PDF (page cropped to the content, vector modules) and SVG, plus copy and share.
 - History of generated codes in local storage, with search, pin, delete with undo, and JSON export/import.
 
-[1.2.0]: https://github.com/mckoss/qrcode-builder/compare/d4483ec...v1.2.0
+[1.2.1]: https://github.com/mckoss/qrcode-builder/compare/9a1c981...v1.2.1
+[1.2.0]: https://github.com/mckoss/qrcode-builder/compare/d4483ec...9a1c981
 [1.1.0]: https://github.com/mckoss/qrcode-builder/compare/367cb8f...d4483ec
 [1.0.0]: https://github.com/mckoss/qrcode-builder/tree/367cb8f

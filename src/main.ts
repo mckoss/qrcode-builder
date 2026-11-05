@@ -1057,6 +1057,7 @@ function addScanned(type: QrTypeId, fields: Fields): void {
     { source: 'scan' },
   );
   history = list;
+  renderHistoryCount();
   if (!ok) toast('Storage is full — delete some codes first.');
   scanDialog.close();
   const entry = history.find((e) => e.id === id);
