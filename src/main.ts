@@ -767,12 +767,7 @@ function entryLabel(e: HistoryEntry): string {
   return e.description.trim().split('\n')[0] || TYPE_BY_ID[e.type].summary(e.fields);
 }
 
-// The library can hold thousands of codes: cards are added a page at a time as you scroll,
-// and each thumbnail is drawn from its source data only when it scrolls into view.
-const PAGE_SIZE = 60;
-let shownCount = PAGE_SIZE;
-let filteredItems: HistoryEntry[] = [];
-
+// Thumbnails are drawn from each code's source data when they scroll into view.
 const thumbObserver = new IntersectionObserver(
   (entries) => {
     for (const en of entries) {
@@ -791,15 +786,7 @@ const thumbObserver = new IntersectionObserver(
   { rootMargin: '400px 0px' },
 );
 
-const moreObserver = new IntersectionObserver((entries) => {
-  if (entries.some((en) => en.isIntersecting) && shownCount < filteredItems.length) {
-    shownCount += PAGE_SIZE;
-    appendHistoryCards();
-  }
-});
-
-function renderHistory(resetPaging = false): void {
-  if (resetPaging) shownCount = PAGE_SIZE;
+function renderHistory(): void {
   renderHistoryCount();
   const q = historySearch.value.trim().toLowerCase();
   const items = history
@@ -819,31 +806,8 @@ function renderHistory(resetPaging = false): void {
     ? 'No matches.'
     : 'No saved codes yet. Create one, or scan an existing code to clone it.';
 
-  filteredItems = items;
   for (const c of historyList.querySelectorAll('canvas')) thumbObserver.unobserve(c);
-  historyList.replaceChildren();
-  appendHistoryCards();
-}
-
-function appendHistoryCards(): void {
-  const from = historyList.querySelectorAll('.history-item').length;
-  const to = Math.min(shownCount, filteredItems.length);
-  historyList.querySelector('.history-more')?.remove();
-  for (const e of filteredItems.slice(from, to)) historyList.append(historyCard(e));
-  if (to < filteredItems.length) {
-    const more = h('li', { class: 'history-more' }, h('button', {
-      type: 'button',
-      class: 'btn',
-      text: `Show more (${(filteredItems.length - to).toLocaleString()} left)`,
-      onclick: () => {
-        shownCount += PAGE_SIZE;
-        appendHistoryCards();
-      },
-    }));
-    historyList.append(more);
-    moreObserver.disconnect();
-    moreObserver.observe(more);
-  }
+  historyList.replaceChildren(...items.map(historyCard));
 }
 
 function historyCard(e: HistoryEntry): HTMLLIElement {
@@ -922,11 +886,7 @@ function openEntry(e: HistoryEntry): void {
 }
 
 function bindHistory(): void {
-  let searchTimer = 0;
-  historySearch.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => renderHistory(true), 120);
-  });
+  historySearch.addEventListener('input', renderHistory);
 
   $('history-export').addEventListener('click', () => {
     const date = new Date().toISOString().slice(0, 10);
@@ -942,7 +902,7 @@ function bindHistory(): void {
     try {
       const r = importHistory(await file.text());
       history = r.list;
-      renderHistory(true);
+      renderHistory();
       updateEditState();
       const n = (k: number, word: string) => `${k.toLocaleString()} ${word}`;
       const parts = [
@@ -1152,7 +1112,7 @@ function showView(view: 'create' | 'history'): void {
   $('view-history').hidden = view !== 'history';
   $('tab-create').setAttribute('aria-selected', String(view === 'create'));
   $('tab-history').setAttribute('aria-selected', String(view === 'history'));
-  if (view === 'history') renderHistory(true);
+  if (view === 'history') renderHistory();
   else if (current) paintPreview();
 }
 

@@ -132,23 +132,10 @@ export function saveDraft(d: Draft): void {
 
 // ---------- library ----------
 //
-// Storage format (v2): an array of compact records holding only what is needed to regenerate a
-// code. Nothing derived is stored: no images, and no encoded payload (re-encoded from the fields).
-// Empty strings and false booleans are omitted from `fields` (they are every type's "empty"
-// value), as are the optional flags below when they have their usual value. This keeps a typical
-// code to roughly 100-250 bytes, so localStorage (about 5 MB per site) holds tens of thousands.
-
-/**
- * Baseline for stored styles: only properties that differ from it are written. This is part of the
- * storage format and must never change (unlike DEFAULT_STYLE, which is just the editor's default).
- */
-const STORED_STYLE_BASE: Readonly<Style> = Object.freeze({
-  fg: '#000000',
-  bg: '#ffffff',
-  transparent: true,
-  ec: 'M',
-  margin: 4,
-});
+// Storage format (v2): an array of records holding only what is needed to regenerate a code.
+// Nothing derived is stored: no images, and no encoded payload (re-encoded from the fields on
+// load). Empty fields and flags with their usual value are omitted. A typical code is a few
+// hundred bytes, so the library is sized for hundreds of codes with plenty of room to spare.
 
 interface StoredEntry {
   id: string;
@@ -157,8 +144,7 @@ interface StoredEntry {
   type: QrTypeId;
   /** Non-empty fields only. */
   fields?: Fields;
-  /** Only properties that differ from STORED_STYLE_BASE. */
-  style?: Partial<Style>;
+  style: Style;
   description?: string;
   /** Present only when false. */
   showDescription?: false;
@@ -171,13 +157,8 @@ interface StoredEntry {
 function toStored(e: HistoryEntry): StoredEntry {
   const fields: Fields = {};
   for (const [k, v] of Object.entries(e.fields)) if (v !== '' && v !== false) fields[k] = v;
-  const style: Partial<Style> = {};
-  for (const k of Object.keys(STORED_STYLE_BASE) as (keyof Style)[]) {
-    if (e.style[k] !== STORED_STYLE_BASE[k]) (style as Record<string, unknown>)[k] = e.style[k];
-  }
-  const out: StoredEntry = { id: e.id, created: e.created, updated: e.updated, type: e.type };
+  const out: StoredEntry = { id: e.id, created: e.created, updated: e.updated, type: e.type, style: { ...e.style } };
   if (Object.keys(fields).length) out.fields = fields;
-  if (Object.keys(style).length) out.style = style;
   if (e.description) out.description = e.description;
   if (!e.showDescription) out.showDescription = false;
   if (e.showDecoded) out.showDecoded = true;
@@ -205,7 +186,7 @@ function sanitizeEntry(e: unknown): HistoryEntry | null {
     updated: typeof o.updated === 'number' ? o.updated : now,
     type: o.type,
     fields,
-    style: sanitizeStyle({ ...STORED_STYLE_BASE, ...(o.style && typeof o.style === 'object' ? o.style : {}) }),
+    style: sanitizeStyle(o.style),
     description: typeof o.description === 'string' ? o.description : '',
     showDescription: o.showDescription !== false,
     showDecoded: o.showDecoded === true,
@@ -236,9 +217,6 @@ function parseList(raw: string | null): HistoryEntry[] {
 
 const copy = (e: HistoryEntry): HistoryEntry => ({ ...e, fields: { ...e.fields }, style: { ...e.style } });
 
-// Parsing (and re-encoding) thousands of codes is cached until the stored string changes.
-let cache: { raw: string; list: HistoryEntry[] } | null = null;
-
 /** Move entries saved by earlier versions into the compact format, then drop the old copy. */
 function migrateLegacy(): void {
   const legacy = safeGet(LEGACY_KEY);
@@ -260,18 +238,13 @@ function migrateLegacy(): void {
 
 export function loadHistory(): HistoryEntry[] {
   migrateLegacy();
-  const raw = safeGet(LIBRARY_KEY) ?? '';
-  if (cache?.raw !== raw) cache = { raw, list: parseList(raw) };
-  return cache.list.map(copy);
+  return parseList(safeGet(LIBRARY_KEY));
 }
 
 /** Persist the whole library, newest first. Returns false if storage is full (nothing is pruned). */
 function saveHistory(list: HistoryEntry[]): boolean {
   list.sort((a, b) => b.updated - a.updated);
-  const raw = JSON.stringify(list.map(toStored));
-  if (!safeSet(LIBRARY_KEY, raw)) return false;
-  cache = { raw, list: list.map(copy) };
-  return true;
+  return safeSet(LIBRARY_KEY, JSON.stringify(list.map(toStored)));
 }
 
 /** Content identity used to avoid duplicate entries. */
@@ -288,9 +261,7 @@ export function sameContent(a: EntryContent, b: EntryContent): boolean {
 
 function nextTimestamp(list: HistoryEntry[]): number {
   // Strictly increasing timestamps keep ordering well-defined for rapid saves.
-  let max = 0;
-  for (const e of list) if (e.updated > max) max = e.updated;
-  return Math.max(Date.now(), max + 1);
+  return Math.max(Date.now(), ...list.map((e) => e.updated + 1));
 }
 
 /** Add a code, or bump an identical existing one. Returns the entry's id. */
