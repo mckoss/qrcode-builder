@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>QR Code Builder</title>
+    <meta name="description" content="Build QR codes for Wi-Fi, links, contacts and more. Transparent backgrounds, custom colors, PNG/PDF/SVG export. Works offline; nothing leaves your device." />
+    <meta name="theme-color" content="#1d4ed8" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="QR Builder" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <img src="/favicon.svg" alt="" width="28" height="28" />
+        <span>QR Code Builder</span>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <button type="button" role="tab" id="tab-create" aria-controls="view-create" aria-selected="true">Create</button>
+        <button type="button" role="tab" id="tab-history" aria-controls="view-history" aria-selected="false">
+          History <span class="badge" id="history-count"></span>
+        </button>
+      </nav>
+      <button type="button" class="btn ghost small" id="install-btn" hidden>Install app</button>
+    </header>
+
+    <main>
+      <section id="view-create" role="tabpanel" aria-labelledby="tab-create" class="create-layout">
+        <div class="editor">
+          <section class="card">
+            <h2>Content</h2>
+            <div class="type-picker" id="type-picker" role="radiogroup" aria-label="QR code type"></div>
+            <form id="fields" class="fields" autocomplete="off" novalidate></form>
+            <div class="field-actions" id="field-actions"></div>
+          </section>
+
+          <section class="card">
+            <h2>Text</h2>
+            <div class="fields">
+              <label class="field wide">
+                <span class="label">Description <span class="muted">(optional)</span></span>
+                <textarea id="description" rows="2" placeholder="e.g. Guest Wi-Fi — scan to join"></textarea>
+              </label>
+              <label class="check wide">
+                <input type="checkbox" id="show-description" />
+                <span>Print description above the code</span>
+              </label>
+              <label class="check wide">
+                <input type="checkbox" id="show-decoded" />
+                <span>Print decoded text below the code <span class="muted">(e.g. network and password, for people who can’t scan)</span></span>
+              </label>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Appearance</h2>
+            <div class="fields">
+              <div class="field">
+                <span class="label" id="fg-label">Code color</span>
+                <div class="color-row">
+                  <input type="color" id="fg-color" aria-labelledby="fg-label" />
+                  <input type="text" id="fg-hex" class="hex" maxlength="7" spellcheck="false" aria-label="Code color hex value" />
+                </div>
+                <div class="swatches" id="fg-swatches"></div>
+              </div>
+              <div class="field">
+                <span class="label" id="bg-label">Background</span>
+                <div class="segmented" role="radiogroup" aria-labelledby="bg-label">
+                  <label><input type="radio" name="bg-mode" value="transparent" /><span>Transparent</span></label>
+                  <label><input type="radio" name="bg-mode" value="solid" /><span>Solid</span></label>
+                </div>
+                <div class="color-row" id="bg-row">
+                  <input type="color" id="bg-color" aria-label="Background color" />
+                  <input type="text" id="bg-hex" class="hex" maxlength="7" spellcheck="false" aria-label="Background color hex value" />
+                </div>
+              </div>
+              <div class="field wide">
+                <span class="label" id="ec-label">Error correction</span>
+                <div class="segmented four" role="radiogroup" aria-labelledby="ec-label">
+                  <label><input type="radio" name="ec" value="L" /><span>L · 7%</span></label>
+                  <label><input type="radio" name="ec" value="M" /><span>M · 15%</span></label>
+                  <label><input type="radio" name="ec" value="Q" /><span>Q · 25%</span></label>
+                  <label><input type="radio" name="ec" value="H" /><span>H · 30%</span></label>
+                </div>
+                <span class="hint">Higher levels survive more damage or overlap, at the cost of a denser code. Use Q or H when overlaying on busy images.</span>
+              </div>
+              <label class="field wide">
+                <span class="label">Quiet zone <span class="muted" id="margin-value"></span></span>
+                <input type="range" id="margin" min="0" max="8" step="1" />
+                <span class="hint">Empty border around the code, in modules. Scanners prefer 4; reduce it when you position the code yourself.</span>
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <aside class="preview-pane">
+          <section class="card preview-card">
+            <div class="preview-stage" id="preview-stage">
+              <canvas id="preview" aria-label="QR code preview" role="img"></canvas>
+              <div class="preview-empty" id="preview-empty"></div>
+            </div>
+            <p class="meta" id="meta"></p>
+            <p class="warning" id="warning" hidden></p>
+
+            <div class="export">
+              <div class="export-row">
+                <label class="inline">
+                  <span>PNG width</span>
+                  <input type="number" id="png-width" min="64" max="8192" step="1" inputmode="numeric" />
+                  <span class="muted">px</span>
+                </label>
+                <button type="button" class="btn primary" id="dl-png">Download PNG</button>
+              </div>
+              <div class="export-row">
+                <label class="inline">
+                  <span>PDF width</span>
+                  <input type="number" id="pdf-width" min="0.25" max="40" step="0.25" inputmode="decimal" />
+                  <select id="pdf-unit" aria-label="PDF width unit">
+                    <option value="in">in</option>
+                    <option value="cm">cm</option>
+                  </select>
+                </label>
+                <button type="button" class="btn primary" id="dl-pdf">Download PDF</button>
+              </div>
+              <p class="output-size" id="output-size"></p>
+              <div class="export-row secondary">
+                <button type="button" class="btn" id="dl-svg">SVG</button>
+                <button type="button" class="btn" id="copy-png">Copy image</button>
+                <button type="button" class="btn" id="share-png" hidden>Share</button>
+                <button type="button" class="btn" id="save-history">Save to history</button>
+              </div>
+            </div>
+
+            <details class="payload">
+              <summary>Encoded content</summary>
+              <pre id="payload"></pre>
+            </details>
+          </section>
+        </aside>
+      </section>
+
+      <section id="view-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+        <div class="card history-toolbar">
+          <input type="search" id="history-search" placeholder="Search history" aria-label="Search history" />
+          <div class="history-tools">
+            <span class="muted" id="storage-usage"></span>
+            <button type="button" class="btn small" id="history-export">Export</button>
+            <button type="button" class="btn small" id="history-import">Import</button>
+            <button type="button" class="btn small danger" id="history-clear">Clear…</button>
+            <input type="file" id="history-file" accept="application/json,.json" hidden />
+          </div>
+        </div>
+        <p class="muted history-note">Codes are added here when you download, copy, share, or save them. Up to 200 are kept; pinned codes are never removed automatically.</p>
+        <ul class="history-list" id="history-list"></ul>
+        <p class="empty-state" id="history-empty" hidden>No saved codes yet.</p>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <span>Everything runs on your device. No accounts, no ads, no tracking.</span>
+      <span id="offline-status"></span>
+    </footer>
+
+    <dialog id="clear-dialog">
+      <form method="dialog">
+        <h3>Clear history?</h3>
+        <p>This permanently removes saved codes from this device.</p>
+        <div class="dialog-actions">
+          <button class="btn" value="cancel">Cancel</button>
+          <button class="btn" value="unpinned">Keep pinned</button>
+          <button class="btn danger" value="all">Delete all</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
