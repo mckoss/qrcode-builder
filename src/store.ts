@@ -12,6 +12,8 @@ export interface Draft {
   pngWidth: number;
   pdfWidth: number;
   pdfUnit: 'in' | 'cm';
+  /** Library entry being revised in the editor, if any. */
+  editingId: string | null;
 }
 
 export interface HistoryEntry {
@@ -27,7 +29,12 @@ export interface HistoryEntry {
   /** The encoded payload, kept for search and de-duplication. */
   payload: string;
   pinned?: boolean;
+  /** How the code entered the library. */
+  source?: 'scan';
 }
+
+/** The editable content of an entry (everything except identity and bookkeeping). */
+export type EntryContent = Omit<HistoryEntry, 'id' | 'created' | 'updated' | 'pinned' | 'source'>;
 
 const DRAFT_KEY = 'qrb.draft.v1';
 const HISTORY_KEY = 'qrb.history.v1';
@@ -63,6 +70,7 @@ export function defaultDraft(): Draft {
     pngWidth: 1024,
     pdfWidth: 3,
     pdfUnit: 'in',
+    editingId: null,
   };
 }
 
@@ -106,6 +114,7 @@ export function loadDraft(): Draft {
     if (typeof o.pngWidth === 'number' && o.pngWidth >= 64 && o.pngWidth <= 8192) d.pngWidth = o.pngWidth;
     if (typeof o.pdfWidth === 'number' && o.pdfWidth > 0 && o.pdfWidth <= 100) d.pdfWidth = o.pdfWidth;
     if (o.pdfUnit === 'in' || o.pdfUnit === 'cm') d.pdfUnit = o.pdfUnit;
+    if (typeof o.editingId === 'string') d.editingId = o.editingId;
   } catch {
     /* corrupted draft: start fresh */
   }
@@ -135,6 +144,7 @@ function sanitizeEntry(e: unknown): HistoryEntry | null {
     showDecoded: o.showDecoded === true,
     payload: o.payload,
     pinned: o.pinned === true,
+    source: o.source === 'scan' ? 'scan' : undefined,
   };
 }
 
@@ -178,7 +188,7 @@ function saveHistory(list: HistoryEntry[]): boolean {
 }
 
 /** Content identity used to avoid duplicate history entries. */
-function sameContent(a: HistoryEntry, b: Omit<HistoryEntry, 'id' | 'created' | 'updated'>): boolean {
+export function sameContent(a: EntryContent, b: EntryContent): boolean {
   return (
     a.type === b.type &&
     a.payload === b.payload &&
@@ -189,21 +199,52 @@ function sameContent(a: HistoryEntry, b: Omit<HistoryEntry, 'id' | 'created' | '
   );
 }
 
-export function addToHistory(
-  item: Omit<HistoryEntry, 'id' | 'created' | 'updated' | 'pinned'>,
-): { list: HistoryEntry[]; ok: boolean } {
-  const list = loadHistory();
+function nextTimestamp(list: HistoryEntry[]): number {
   // Strictly increasing timestamps keep ordering (and pruning) well-defined for rapid saves.
-  const now = Math.max(Date.now(), ...list.map((e) => e.updated + 1));
-  const existing = list.find((e) => sameContent(e, item));
+  return Math.max(Date.now(), ...list.map((e) => e.updated + 1));
+}
+
+/** Add a code, or bump an identical existing one. Returns the entry's id. */
+export function addToHistory(
+  item: EntryContent,
+  opts: { source?: 'scan'; dedupe?: boolean } = {},
+): { list: HistoryEntry[]; ok: boolean; id: string } {
+  const list = loadHistory();
+  const now = nextTimestamp(list);
+  const existing = opts.dedupe === false ? undefined : list.find((e) => sameContent(e, item));
+  let id: string;
   if (existing) {
     existing.updated = now;
     existing.fields = { ...item.fields };
+    id = existing.id;
   } else {
-    list.push({ ...item, fields: { ...item.fields }, style: { ...item.style }, id: newId(), created: now, updated: now });
+    id = newId();
+    list.push({
+      ...item,
+      fields: { ...item.fields },
+      style: { ...item.style },
+      id,
+      created: now,
+      updated: now,
+      ...(opts.source ? { source: opts.source } : {}),
+    });
   }
   const ok = saveHistory(list);
-  return { list, ok };
+  return { list: loadHistory(), ok, id };
+}
+
+export function getEntry(id: string): HistoryEntry | undefined {
+  return loadHistory().find((e) => e.id === id);
+}
+
+/** Revise an entry in place, keeping its id, creation time, pin and source. Null if it no longer exists. */
+export function reviseEntry(id: string, item: EntryContent): { list: HistoryEntry[]; ok: boolean } | null {
+  const list = loadHistory();
+  const e = list.find((x) => x.id === id);
+  if (!e) return null;
+  Object.assign(e, { ...item, fields: { ...item.fields }, style: { ...item.style }, updated: nextTimestamp(list) });
+  const ok = saveHistory(list);
+  return { list: loadHistory(), ok };
 }
 
 export function updateEntry(id: string, patch: Partial<Pick<HistoryEntry, 'pinned'>>): HistoryEntry[] {
