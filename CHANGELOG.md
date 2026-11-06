@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/). The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.2] - 2026-11-06
+
+### Added
+- An "About" link in the footer that opens the blog post about the app ([Vibe Coding a QR Code Builder With No Strings Attached](https://mckoss.com/posts/vibe-coding-qr-code-builder/)).
+
 ## [1.2.1] - 2026-11-05
 
 ### Fixed
@@ -47,7 +52,8 @@ All notable changes to this project are documented here. This project follows [S
 - Export to PNG, PDF (page cropped to the content, vector modules) and SVG, plus copy and share.
 - History of generated codes in local storage, with search, pin, delete with undo, and JSON export/import.
 
-[1.2.1]: https://github.com/mckoss/qrcode-builder/compare/9a1c981...v1.2.1
+[1.2.2]: https://github.com/mckoss/qrcode-builder/compare/2bf9900...v1.2.2
+[1.2.1]: https://github.com/mckoss/qrcode-builder/compare/9a1c981...2bf9900
 [1.2.0]: https://github.com/mckoss/qrcode-builder/compare/d4483ec...9a1c981
 [1.1.0]: https://github.com/mckoss/qrcode-builder/compare/367cb8f...d4483ec
 [1.0.0]: https://github.com/mckoss/qrcode-builder/tree/367cb8f

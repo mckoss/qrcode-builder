@@ -890,6 +890,10 @@ input[type='range'] {
 
 /* ---------- footer, dialog, toast ---------- */
 
+.app-footer a {
+  color: var(--accent);
+}
+
 .app-footer {
   display: flex;
   justify-content: space-between;
