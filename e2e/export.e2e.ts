@@ -129,6 +129,16 @@ test.describe('create and export', () => {
   });
 });
 
+test('footer About link opens the blog post about the app in a new tab', async ({ page }) => {
+  await freshApp(page);
+  const about = page.locator('#about-link');
+  await expect(about).toBeVisible();
+  await expect(about).toHaveText('About');
+  await expect(about).toHaveAttribute('href', 'https://mckoss.com/posts/vibe-coding-qr-code-builder/');
+  await expect(about).toHaveAttribute('target', '_blank');
+  await expect(about).toHaveAttribute('rel', 'noopener');
+});
+
 test.describe('phone layout', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
