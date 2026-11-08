@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/). The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.3] - 2026-11-08
+
+### Added
+- Page-view analytics via the shared mckoss.com Umami loader (`https://mckoss.com/js/mk.js`). The service worker doesn't cache it, and the app works offline without it.
+
 ## [1.2.2] - 2026-11-06
 
 ### Added

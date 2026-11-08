@@ -22,7 +22,8 @@ export function failOnPageErrors(page: Page): () => void {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text());
+    // The third-party analytics loader can't load offline; that's expected and harmless.
+    if (m.type() === 'error' && !/^https:\/\/(stats\.)?mckoss\.com\//.test(m.location().url)) errors.push(m.text());
   });
   return () => expect(errors, 'page errors').toEqual([]);
 }
