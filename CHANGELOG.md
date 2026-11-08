@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/). The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] - 2026-11-08
+
+### Added
+- Zoom while scanning: pinch on the camera view, or use the slider, +/− buttons or mouse wheel.
+  - The camera's own zoom is used first where the browser exposes it (optical on many phones). Digital zoom adds up to 4× beyond that, or provides all of the zoom where camera zoom isn't available.
+  - A readout on the camera view shows the current zoom.
+
+### Changed
+- Scanning reads only the code inside the viewfinder square, and picks the one nearest the center if several are visible, so zooming in isolates a single code among many. The camera now requests up to 1080p so digital zoom has detail to work with.
+
 ## [1.2.4] - 2026-11-08
 
 ### Changed
@@ -62,6 +72,7 @@ All notable changes to this project are documented here. This project follows [S
 - Export to PNG, PDF (page cropped to the content, vector modules) and SVG, plus copy and share.
 - History of generated codes in local storage, with search, pin, delete with undo, and JSON export/import.
 
+[1.3.0]: https://github.com/mckoss/qrcode-builder/compare/0c6cbf2...v1.3.0
 [1.2.2]: https://github.com/mckoss/qrcode-builder/compare/2bf9900...v1.2.2
 [1.2.1]: https://github.com/mckoss/qrcode-builder/compare/9a1c981...2bf9900
 [1.2.0]: https://github.com/mckoss/qrcode-builder/compare/d4483ec...9a1c981

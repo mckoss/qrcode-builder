@@ -972,6 +972,7 @@ async function startCamera(deviceId?: string): Promise<void> {
     return;
   }
   setScanStatus('Starting camera…');
+  $('scan-zoom-row').hidden = true;
   try {
     scanner ??= new CameraScanner(scanVideo, (text) => {
       navigator.vibrate?.(40);
@@ -983,12 +984,80 @@ async function startCamera(deviceId?: string): Promise<void> {
       return;
     }
     setScanStatus('Point your camera at a QR code.');
+    syncZoomUi();
+    $('scan-zoom-row').hidden = false;
     const cams = await listCameras().catch(() => []);
     $('scan-switch').hidden = cams.length < 2;
   } catch (err) {
     console.warn(err);
     setScanStatus(cameraErrorMessage(err));
   }
+}
+
+// Zoom: pinch on the camera view, the slider (logarithmic, so low zoom levels get as much travel
+// as high ones), the +/- buttons, or the mouse wheel.
+const zoomSlider = $<HTMLInputElement>('scan-zoom');
+
+function syncZoomUi(): void {
+  if (!scanner) return;
+  const { min, max } = scanner.zoomRange;
+  zoomSlider.min = String(Math.log(min));
+  zoomSlider.max = String(Math.log(max));
+  zoomSlider.value = String(Math.log(scanner.zoom));
+  zoomSlider.setAttribute('aria-valuetext', `${scanner.zoom.toFixed(1)} times`);
+  const badge = $('scan-zoom-badge');
+  badge.textContent = `${scanner.zoom.toFixed(1)}×`;
+  badge.title = scanner.hasCameraZoom ? 'Camera zoom, then digital zoom' : 'Digital zoom';
+}
+
+function setScanZoom(zoom: number): void {
+  if (!scanner || !isFinite(zoom)) return;
+  scanner.setZoom(zoom);
+  syncZoomUi();
+}
+
+function bindZoomGestures(): void {
+  const view = $('scan-view');
+  const pointers = new Map<number, { x: number; y: number }>();
+  let pinch: { distance: number; zoom: number } | null = null;
+  const spread = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  view.addEventListener('pointerdown', (e) => {
+    try {
+      view.setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic or already-released pointer */
+    }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) pinch = { distance: Math.max(1, spread()), zoom: scanner?.zoom ?? 1 };
+  });
+  view.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pointers.size >= 2) setScanZoom((pinch.zoom * spread()) / pinch.distance);
+  });
+  const lift = (e: PointerEvent) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+  };
+  view.addEventListener('pointerup', lift);
+  view.addEventListener('pointercancel', lift);
+  view.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      setScanZoom((scanner?.zoom ?? 1) * Math.exp(-e.deltaY * 0.0015));
+    },
+    { passive: false },
+  );
+  // Safari's own pinch gesture would otherwise zoom the page.
+  view.addEventListener('gesturestart', (e) => e.preventDefault());
+
+  zoomSlider.addEventListener('input', () => setScanZoom(Math.exp(Number(zoomSlider.value))));
+  $('scan-zoom-in').addEventListener('click', () => setScanZoom((scanner?.zoom ?? 1) * 1.25));
+  $('scan-zoom-out').addEventListener('click', () => setScanZoom((scanner?.zoom ?? 1) / 1.25));
 }
 
 function openScanner(): void {
@@ -1072,6 +1141,8 @@ function bindScanner(): void {
   $('history-scan').addEventListener('click', openScanner);
   $('scan-close').addEventListener('click', () => scanDialog.close());
   scanDialog.addEventListener('close', () => scanner?.stop());
+
+  bindZoomGestures();
 
   $('scan-switch').addEventListener('click', async () => {
     const cams = await listCameras().catch(() => []);

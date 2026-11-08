@@ -19,6 +19,7 @@ An offline-first Progressive Web App for making QR codes. No accounts, no ads, n
   - Copy to clipboard, or share via the system share sheet where supported.
 - **Clone by scanning:**
   - Read an existing QR code with the camera, or from an image file or a pasted image.
+  - Zoom in to pick out one code: pinch, slider, +/− or mouse wheel. The camera's own (often optical) zoom is used first where the browser supports it, then up to 4× digital zoom. Only the code inside the viewfinder square is read, nearest the center if several are visible.
   - The content is recognized as Wi-Fi, URL, email, phone, SMS, contact (vCard or MECARD), location or event, then added to the library as an editable code. Anything else becomes text.
   - If the original has details the form can't represent (for example a second phone number or a recurrence rule), you're told what would be left out, and you can keep the exact original text instead.
   - Uses the browser's `BarcodeDetector` where available, otherwise [jsQR](https://github.com/cozmo/jsQR). Both work offline.

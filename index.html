@@ -201,9 +201,15 @@
         <button type="button" class="btn small ghost" id="scan-close" aria-label="Close scanner">Close</button>
       </div>
       <div id="scan-live">
-        <div class="scan-view">
+        <div class="scan-view" id="scan-view">
           <video id="scan-video" playsinline muted></video>
           <div class="scan-frame" aria-hidden="true"></div>
+          <span class="scan-zoom-badge" id="scan-zoom-badge" aria-hidden="true">1.0×</span>
+        </div>
+        <div class="scan-zoom" id="scan-zoom-row" hidden>
+          <button type="button" class="btn small" id="scan-zoom-out" aria-label="Zoom out">−</button>
+          <input type="range" id="scan-zoom" min="0" max="1" step="any" value="0" aria-label="Zoom" />
+          <button type="button" class="btn small" id="scan-zoom-in" aria-label="Zoom in">+</button>
         </div>
         <p class="scan-status" id="scan-status" role="status"></p>
         <div class="scan-actions">
@@ -211,7 +217,7 @@
           <button type="button" class="btn" id="scan-file-btn">Scan from image…</button>
           <input type="file" id="scan-file" accept="image/*" hidden />
         </div>
-        <p class="hint scan-hint">You can also paste an image of a QR code.</p>
+        <p class="hint scan-hint">Pinch or use the slider to zoom in on one code; only the code inside the square is read. You can also paste an image of a QR code.</p>
       </div>
       <div id="scan-result" class="scan-result" hidden>
         <p class="scan-found">Found a <strong id="scan-type"></strong> code</p>
