@@ -108,3 +108,78 @@ export async function fakeCamera(page: Page, text: string): Promise<void> {
 export async function storedLibrary(page: Page): Promise<Record<string, unknown>[]> {
   return page.evaluate(() => JSON.parse(localStorage.getItem('qrb.library.v2') ?? '[]'));
 }
+
+export interface SceneCode {
+  text: string;
+  /** Top-left corner and size, in pixels of the 640×480 fake camera frame. */
+  x: number;
+  y: number;
+  size: number;
+}
+
+/**
+ * Replace the camera with a 640×480 canvas stream showing several QR codes on a busy background.
+ * Codes are hidden until `showScene(page)`, so a test can set the zoom first. With `cameraZoom`,
+ * the track also reports a zoom capability and records applied zoom values in `window.__zoomApplied`.
+ */
+export async function fakeCameraScene(
+  page: Page,
+  codes: SceneCode[],
+  opts: { cameraZoom?: { min: number; max: number; step: number } } = {},
+): Promise<void> {
+  const images = await Promise.all(codes.map((c) => QRCode.toDataURL(c.text, { width: 300, margin: 4 })));
+  await page.addInitScript(
+    ({ codes, images, cameraZoom }) => {
+      const w = window as unknown as { __showScene?: boolean; __zoomApplied: number[] };
+      w.__zoomApplied = [];
+      navigator.mediaDevices.getUserMedia = async () => {
+        const c = document.createElement('canvas');
+        c.width = 640;
+        c.height = 480;
+        const g = c.getContext('2d')!;
+        const imgs = await Promise.all(
+          images.map(async (src) => {
+            const img = new Image();
+            img.src = src;
+            await img.decode();
+            return img;
+          }),
+        );
+        const draw = () => {
+          g.fillStyle = '#887766';
+          g.fillRect(0, 0, 640, 480);
+          if (w.__showScene) codes.forEach((code, i) => g.drawImage(imgs[i], code.x, code.y, code.size, code.size));
+        };
+        draw();
+        setInterval(draw, 60);
+        const stream = c.captureStream(15);
+        const track = stream.getVideoTracks()[0];
+        if (cameraZoom) {
+          const caps = track.getCapabilities?.bind(track);
+          track.getCapabilities = () => ({ ...(caps?.() ?? {}), zoom: cameraZoom }) as MediaTrackCapabilities;
+          track.applyConstraints = async (constraints?: MediaTrackConstraints) => {
+            const z = (constraints?.advanced?.[0] as { zoom?: number } | undefined)?.zoom;
+            if (typeof z === 'number') w.__zoomApplied.push(z);
+          };
+        }
+        return stream;
+      };
+      navigator.mediaDevices.enumerateDevices = async () =>
+        [{ kind: 'videoinput', deviceId: 'fake', label: 'Fake camera', groupId: '' } as MediaDeviceInfo];
+    },
+    { codes, images, cameraZoom: opts.cameraZoom },
+  );
+}
+
+export async function showScene(page: Page): Promise<void> {
+  await page.evaluate(() => ((window as unknown as { __showScene: boolean }).__showScene = true));
+}
+
+/** Set the scanner zoom through its (logarithmic) slider. */
+export async function setScanZoom(page: Page, zoom: number): Promise<void> {
+  await page.locator('#scan-zoom').evaluate((el, z) => {
+    const input = el as HTMLInputElement;
+    input.value = String(Math.log(z));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, zoom);
+}

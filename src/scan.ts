@@ -3,8 +3,22 @@
 
 type Decode = (canvas: HTMLCanvasElement) => Promise<string | null>;
 
+interface DetectedCode {
+  rawValue: string;
+  boundingBox: DOMRectReadOnly;
+}
 interface NativeDetector {
-  detect(source: CanvasImageSource): Promise<{ rawValue: string }[]>;
+  detect(source: CanvasImageSource): Promise<DetectedCode[]>;
+}
+
+/** When several codes are visible, the one nearest the center of the image is the one meant. */
+export function nearestToCenter<T extends { boundingBox: { x: number; y: number; width: number; height: number } }>(
+  codes: T[],
+  size: { width: number; height: number },
+): T {
+  const dist = (b: T['boundingBox']) =>
+    Math.hypot(b.x + b.width / 2 - size.width / 2, b.y + b.height / 2 - size.height / 2);
+  return codes.reduce((best, c) => (dist(c.boundingBox) < dist(best.boundingBox) ? c : best));
 }
 interface NativeDetectorCtor {
   new (opts: { formats: string[] }): NativeDetector;
@@ -35,7 +49,7 @@ export function getDecoder(): Promise<Decode> {
           let frame = 0;
           return async (canvas) => {
             const r = await native.detect(canvas);
-            if (r.length) return r[0].rawValue;
+            if (r.length) return nearestToCenter(r, canvas).rawValue;
             // Native detectors often skip inverted codes; try jsQR on every few frames.
             return ++frame % 4 === 0 ? fallback(canvas) : null;
           };
@@ -70,11 +84,72 @@ export function cameraErrorMessage(err: unknown): string {
   }
 }
 
+// ---------- zoom ----------
+//
+// Zoom uses the camera's own zoom first (optical on many phones; the browser exposes it as the
+// `zoom` track capability, which may switch lenses), then adds digital zoom on top by decoding an
+// enlarged crop of the frame. Only the viewfinder square is decoded, so zooming in also isolates
+// one code when several are in view.
+
+/** Extra digital zoom available beyond the camera's maximum. */
+export const DIGITAL_ZOOM_MAX = 4;
+/** Viewfinder square as a fraction of the camera view's height (keep in sync with .scan-frame). */
+export const FRAME_FRACTION = 0.72;
+
+export interface HardwareZoom {
+  min: number;
+  max: number;
+  step: number;
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+export function zoomRange(hw: HardwareZoom | null): { min: number; max: number } {
+  return hw ? { min: hw.min, max: hw.max * DIGITAL_ZOOM_MAX } : { min: 1, max: DIGITAL_ZOOM_MAX };
+}
+
+/** Split a total zoom into camera zoom (used first, null if unsupported) and digital zoom. */
+export function splitZoom(total: number, hw: HardwareZoom | null): { hardware: number | null; digital: number } {
+  if (!hw) return { hardware: null, digital: clamp(total, 1, DIGITAL_ZOOM_MAX) };
+  let hardware = clamp(total, hw.min, hw.max);
+  if (hw.step > 0) hardware = clamp(hw.min + Math.round((hardware - hw.min) / hw.step) * hw.step, hw.min, hw.max);
+  const digital = total / hardware;
+  // Ignore a hairline of digital zoom left over from rounding to the camera's zoom step.
+  return { hardware, digital: digital < 1.02 ? 1 : clamp(digital, 1, DIGITAL_ZOOM_MAX) };
+}
+
+/**
+ * The square of the video frame (in video pixels) to decode: what is inside the viewfinder, plus a
+ * small margin, at the current digital zoom. The video is shown with object-fit: cover.
+ */
+export function decodeRegion(
+  video: { width: number; height: number },
+  view: { width: number; height: number },
+  digital: number,
+): { x: number; y: number; size: number } {
+  let size: number;
+  if (view.width > 0 && view.height > 0) {
+    const cssPerVideoPx = Math.max(view.width / video.width, view.height / video.height) * digital;
+    const frame = Math.min(view.height * FRAME_FRACTION, view.width) * 1.1;
+    size = frame / cssPerVideoPx;
+  } else {
+    size = Math.min(video.width, video.height) / digital;
+  }
+  size = Math.min(size, video.width, video.height);
+  return { x: (video.width - size) / 2, y: (video.height - size) / 2, size };
+}
+
 export class CameraScanner {
   private stream: MediaStream | null = null;
+  private track: MediaStreamTrack | null = null;
   private timer = 0;
   private running = false;
   private readonly canvas = document.createElement('canvas');
+  private hw: HardwareZoom | null = null;
+  private total = 1;
+  private digital = 1;
+  private hwBusy = false;
+  private hwPending: number | null = null;
 
   constructor(
     private readonly video: HTMLVideoElement,
@@ -82,32 +157,95 @@ export class CameraScanner {
   ) {}
 
   get deviceId(): string | undefined {
-    return this.stream?.getVideoTracks()[0]?.getSettings().deviceId;
+    return this.track?.getSettings().deviceId;
+  }
+
+  /** Current total zoom (camera × digital). */
+  get zoom(): number {
+    return this.total;
+  }
+
+  get zoomRange(): { min: number; max: number } {
+    return zoomRange(this.hw);
+  }
+
+  /** Whether the camera's own zoom is available (otherwise zoom is digital only). */
+  get hasCameraZoom(): boolean {
+    return !!this.hw;
+  }
+
+  /** Set the total zoom; returns the value actually applied. */
+  setZoom(total: number): number {
+    const r = this.zoomRange;
+    this.total = clamp(total, r.min, r.max);
+    const { hardware, digital } = splitZoom(this.total, this.hw);
+    this.digital = digital;
+    this.video.style.transform = digital > 1.001 ? `scale(${digital.toFixed(3)})` : '';
+    if (hardware !== null) void this.applyHardwareZoom(hardware);
+    return this.total;
+  }
+
+  private async applyHardwareZoom(zoom: number): Promise<void> {
+    // Coalesce rapid changes (pinching): only the latest value is applied next.
+    if (this.hwBusy) {
+      this.hwPending = zoom;
+      return;
+    }
+    const track = this.track;
+    if (!track) return;
+    this.hwBusy = true;
+    try {
+      await track.applyConstraints({ advanced: [{ zoom } as MediaTrackConstraintSet] });
+    } catch {
+      /* the camera refused: digital zoom still works */
+    } finally {
+      this.hwBusy = false;
+      const next = this.hwPending;
+      this.hwPending = null;
+      if (next !== null && next !== zoom) void this.applyHardwareZoom(next);
+    }
   }
 
   async start(deviceId?: string): Promise<void> {
     this.stop();
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: deviceId
-        ? { deviceId: { exact: deviceId } }
-        : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    });
+    const video: MediaTrackConstraints & { zoom?: boolean } = {
+      ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
+      // Higher resolution leaves detail for digital zoom; `zoom: true` asks for camera zoom control.
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      zoom: true,
+    };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
     this.stream = stream;
+    this.track = stream.getVideoTracks()[0] ?? null;
+    const caps = (this.track?.getCapabilities?.() ?? {}) as { zoom?: Partial<HardwareZoom> };
+    const z = caps.zoom;
+    this.hw =
+      z && typeof z.min === 'number' && typeof z.max === 'number' && z.max > z.min
+        ? { min: z.min, max: z.max, step: z.step ?? 0.1 }
+        : null;
     this.running = true;
     this.video.srcObject = stream;
     this.video.setAttribute('playsinline', '');
     this.video.muted = true;
     await this.video.play().catch(() => {});
+    this.setZoom(this.total); // re-apply (and re-clamp) the zoom for this camera
     const decode = await getDecoder();
+    const ctx = this.canvas.getContext('2d', { willReadFrequently: true })!;
     const tick = async () => {
       if (!this.running) return;
       const v = this.video;
       if (v.videoWidth && v.readyState >= 2) {
-        const scale = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
-        this.canvas.width = Math.round(v.videoWidth * scale);
-        this.canvas.height = Math.round(v.videoHeight * scale);
-        this.canvas.getContext('2d', { willReadFrequently: true })!.drawImage(v, 0, 0, this.canvas.width, this.canvas.height);
+        const r = decodeRegion(
+          { width: v.videoWidth, height: v.videoHeight },
+          { width: v.clientWidth, height: v.clientHeight },
+          this.digital,
+        );
+        // Downscale big crops for speed; upscale small (zoomed) crops so modules span several pixels.
+        const out = Math.round(clamp(r.size, 480, 960));
+        this.canvas.width = this.canvas.height = out;
+        ctx.imageSmoothingEnabled = out <= r.size;
+        ctx.drawImage(v, r.x, r.y, r.size, r.size, 0, 0, out, out);
         try {
           const text = await decode(this.canvas);
           if (text && this.running) {
@@ -129,6 +267,7 @@ export class CameraScanner {
     clearTimeout(this.timer);
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    this.track = null;
     this.video.srcObject = null;
   }
 }
