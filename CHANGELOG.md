@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/). The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.4] - 2026-11-08
+
+### Changed
+- Privacy wording now matches what the app does: QR content, library and scans never leave the device, and the only data sent is an anonymous, cookieless page-view count. Replaces "no tracking" and "nothing leaves your device" in the footer, description, web app manifest and README.
+
 ## [1.2.3] - 2026-11-08
 
 ### Added

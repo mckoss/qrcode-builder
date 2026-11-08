@@ -32,7 +32,7 @@ export default defineConfig({
         name: 'QR Code Builder',
         short_name: 'QR Builder',
         description:
-          'Build QR codes for Wi-Fi, links, contacts and more. Transparent backgrounds, custom colors, PNG/PDF/SVG export. Works offline; nothing leaves your device.',
+          'Build QR codes for Wi-Fi, links, contacts and more. Transparent backgrounds, custom colors, PNG/PDF/SVG export. Works offline; your QR codes never leave your device.',
         theme_color: '#1d4ed8',
         background_color: '#f6f7f9',
         display: 'standalone',

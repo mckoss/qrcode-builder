@@ -1,7 +1,7 @@
 {
   "name": "qrcode-builder",
   "private": true,
-  "version": "1.2.3",
+  "version": "1.2.4",
   "type": "module",
   "description": "Offline-first PWA for building QR codes. No accounts, no ads.",
   "license": "Apache-2.0",

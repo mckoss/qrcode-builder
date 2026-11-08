@@ -1,6 +1,6 @@
 # QR Code Builder
 
-An offline-first Progressive Web App for making QR codes. No accounts, no ads, no tracking: everything runs and is stored on your device.
+An offline-first Progressive Web App for making QR codes. No accounts, no ads, no cookies. Everything you make runs and is stored on your device; the only thing sent anywhere is an anonymous, cookieless page-view count (page address, referrer, screen size, language, browser and approximate country) to a self-hosted [Umami](https://umami.is) at stats.mckoss.com. Your QR content, library and scans are never sent.
 
 **Live:** https://mckoss.github.io/qrcode-builder/ (once GitHub Pages is enabled; see [Deploying](#deploying))
 
